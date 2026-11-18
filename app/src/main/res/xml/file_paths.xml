@@ -6,4 +6,7 @@
     <files-path
         name="internal_recordings"
         path="recordings/" />
+    <files-path
+        name="exports"
+        path="exports/" />
 </paths>

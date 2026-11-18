@@ -13,9 +13,11 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -69,6 +71,7 @@ import com.example.data.RecordingItem
 import com.example.ui.StudioTab
 import com.example.ui.VoxForgeViewModel
 import com.example.ui.screens.EffectsScreen
+import com.example.ui.screens.ImportAudioOverlay
 import com.example.ui.screens.RecorderScreen
 import com.example.ui.screens.VoiceChangerScreen
 import com.example.ui.theme.CyanContainer
@@ -107,15 +110,27 @@ fun VoxForgeApp(
 
     val selectedTab by viewModel.selectedTab.collectAsStateWithLifecycle()
     val hasMicPermission by viewModel.hasMicPermission.collectAsStateWithLifecycle()
+    val hasAudioPermission by viewModel.hasAudioLibraryPermission.collectAsStateWithLifecycle()
+    val showImportSheet by viewModel.showImportSheet.collectAsStateWithLifecycle()
+    val deviceAudioFiles by viewModel.deviceAudioFiles.collectAsStateWithLifecycle()
+    val isLoadingDeviceAudio by viewModel.isLoadingDeviceAudio.collectAsStateWithLifecycle()
     val hardwareState by viewModel.hardwareState.collectAsStateWithLifecycle()
     val recordingStatus by viewModel.recordingStatus.collectAsStateWithLifecycle()
     val metrics by viewModel.liveMetrics.collectAsStateWithLifecycle()
     val voiceChangerConfig by viewModel.voiceChangerConfig.collectAsStateWithLifecycle()
     val monitoringConfig by viewModel.monitoringConfig.collectAsStateWithLifecycle()
     val effectsConfig by viewModel.effectsConfig.collectAsStateWithLifecycle()
+    val userEffectPresets by viewModel.userEffectPresets.collectAsStateWithLifecycle()
     val recordings by viewModel.recordings.collectAsStateWithLifecycle()
     val playbackState by viewModel.playbackState.collectAsStateWithLifecycle()
+    val importedPlaybackState by viewModel.importedPlaybackState.collectAsStateWithLifecycle()
     val statusBanner by viewModel.statusBanner.collectAsStateWithLifecycle()
+
+    val audioPermissionString = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        Manifest.permission.READ_MEDIA_AUDIO
+    } else {
+        Manifest.permission.READ_EXTERNAL_STORAGE
+    }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -126,6 +141,25 @@ fun VoxForgeApp(
                 Manifest.permission.RECORD_AUDIO
             ) == PackageManager.PERMISSION_GRANTED
         viewModel.setPermissionGranted(micGranted)
+    }
+
+    val audioPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        val hasAudio = granted || ContextCompat.checkSelfPermission(
+            context,
+            audioPermissionString
+        ) == PackageManager.PERMISSION_GRANTED
+        viewModel.setAudioLibraryPermissionGranted(hasAudio)
+    }
+
+    // Zero-permission Android Photo Picker strictly configured for VideoOnly selection
+    val videoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.importVideoUri(uri)
+        }
     }
 
     val requestPermissions = {
@@ -144,6 +178,11 @@ fun VoxForgeApp(
             Manifest.permission.RECORD_AUDIO
         ) == PackageManager.PERMISSION_GRANTED
         viewModel.setPermissionGranted(granted)
+        val audioGranted = ContextCompat.checkSelfPermission(
+            context,
+            audioPermissionString
+        ) == PackageManager.PERMISSION_GRANTED
+        viewModel.setAudioLibraryPermissionGranted(audioGranted)
         if (!granted) {
             requestPermissions()
         }
@@ -161,6 +200,11 @@ fun VoxForgeApp(
                         Manifest.permission.RECORD_AUDIO
                     ) == PackageManager.PERMISSION_GRANTED
                     viewModel.setPermissionGranted(granted)
+                    val audioGranted = ContextCompat.checkSelfPermission(
+                        context,
+                        audioPermissionString
+                    ) == PackageManager.PERMISSION_GRANTED
+                    viewModel.setAudioLibraryPermissionGranted(audioGranted)
                     viewModel.refreshDevices()
                     viewModel.setAppForeground(true)
                 }
@@ -195,205 +239,258 @@ fun VoxForgeApp(
         context.startActivity(Intent.createChooser(shareIntent, "Export ${item.fileName}"))
     }
 
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val useNavRail = maxWidth >= 700.dp
+    val launchSaveAndShareExport = {
+        viewModel.saveAndShareImportedAudio { shareUri, fileName ->
+            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "audio/wav"
+                putExtra(Intent.EXTRA_STREAM, shareUri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(Intent.createChooser(shareIntent, "Share $fileName"))
+        }
+    }
 
-        Row(modifier = Modifier.fillMaxSize()) {
-            if (useNavRail) {
-                NavigationRail(
-                    containerColor = StudioRack,
-                    modifier = Modifier.fillMaxHeight()
-                ) {
-                    StudioTab.entries.forEach { tab ->
-                        val isSelected = selectedTab == tab
-                        NavigationRailItem(
-                            selected = isSelected,
-                            onClick = { viewModel.selectTab(tab) },
-                            icon = { TabIcon(tab = tab, selected = isSelected) },
-                            label = { Text(tabLabel(tab)) },
-                            colors = NavigationRailItemDefaults.colors(
-                                selectedIconColor = CyanSignal,
-                                selectedTextColor = CyanSignal,
-                                indicatorColor = CyanContainer,
-                                unselectedIconColor = TextSecondary,
-                                unselectedTextColor = TextSecondary
-                            ),
-                            modifier = Modifier.testTag("tab_${tab.name.lowercase()}")
-                        )
+    Box(modifier = Modifier.fillMaxSize()) {
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            val useNavRail = maxWidth >= 700.dp
+
+            Row(modifier = Modifier.fillMaxSize()) {
+                if (useNavRail) {
+                    NavigationRail(
+                        containerColor = StudioRack,
+                        modifier = Modifier.fillMaxHeight()
+                    ) {
+                        StudioTab.entries.forEach { tab ->
+                            val isSelected = selectedTab == tab
+                            NavigationRailItem(
+                                selected = isSelected,
+                                onClick = { viewModel.selectTab(tab) },
+                                icon = { TabIcon(tab = tab, selected = isSelected) },
+                                label = { Text(tabLabel(tab)) },
+                                colors = NavigationRailItemDefaults.colors(
+                                    selectedIconColor = CyanSignal,
+                                    selectedTextColor = CyanSignal,
+                                    indicatorColor = CyanContainer,
+                                    unselectedIconColor = TextSecondary,
+                                    unselectedTextColor = TextSecondary
+                                ),
+                                modifier = Modifier.testTag("tab_${tab.name.lowercase()}")
+                            )
+                        }
                     }
                 }
-            }
 
-            Scaffold(
-                modifier = Modifier.weight(1f),
-                containerColor = StudioObsidian,
-                contentWindowInsets = WindowInsets.safeDrawing,
-                topBar = {
-                    TopAppBar(
-                        colors = TopAppBarDefaults.topAppBarColors(
-                            containerColor = StudioRack,
-                            titleContentColor = MaterialTheme.colorScheme.onSurface
-                        ),
-                        title = {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                Text(
-                                    text = stringResource(R.string.app_name),
-                                    style = MaterialTheme.typography.headlineSmall
-                                )
-                                if (recordingStatus == RecordingStatus.RECORDING) {
-                                    Surface(
-                                        shape = MaterialTheme.shapes.small,
-                                        color = RecordCoralContainer,
-                                        border = BorderStroke(1.dp, RecordCoral)
-                                    ) {
-                                        Text(
-                                            text = "REC",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = RecordCoral,
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                        )
-                                    }
-                                } else if (monitoringConfig.livePreviewEnabled) {
-                                    Surface(
-                                        shape = MaterialTheme.shapes.small,
-                                        color = CyanContainer,
-                                        border = BorderStroke(1.dp, CyanSignal)
-                                    ) {
-                                        Text(
-                                            text = "PREVIEW",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = CyanSignal,
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                        )
+                Scaffold(
+                    modifier = Modifier.weight(1f),
+                    containerColor = StudioObsidian,
+                    contentWindowInsets = WindowInsets.safeDrawing,
+                    topBar = {
+                        TopAppBar(
+                            colors = TopAppBarDefaults.topAppBarColors(
+                                containerColor = StudioRack,
+                                titleContentColor = MaterialTheme.colorScheme.onSurface
+                            ),
+                            title = {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Text(
+                                        text = stringResource(R.string.app_name),
+                                        style = MaterialTheme.typography.headlineSmall
+                                    )
+                                    if (recordingStatus == RecordingStatus.RECORDING) {
+                                        Surface(
+                                            shape = MaterialTheme.shapes.small,
+                                            color = RecordCoralContainer,
+                                            border = BorderStroke(1.dp, RecordCoral)
+                                        ) {
+                                            Text(
+                                                text = "REC",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = RecordCoral,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    } else if (monitoringConfig.livePreviewEnabled) {
+                                        Surface(
+                                            shape = MaterialTheme.shapes.small,
+                                            color = CyanContainer,
+                                            border = BorderStroke(1.dp, CyanSignal)
+                                        ) {
+                                            Text(
+                                                text = "PREVIEW",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = CyanSignal,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
                                     }
                                 }
                             }
-                        }
-                    )
-                },
-                bottomBar = {
-                    if (!useNavRail) {
-                        NavigationBar(
-                            containerColor = StudioRack,
-                            tonalElevation = 0.dp
-                        ) {
-                            StudioTab.entries.forEach { tab ->
-                                val isSelected = selectedTab == tab
-                                NavigationBarItem(
-                                    selected = isSelected,
-                                    onClick = { viewModel.selectTab(tab) },
-                                    icon = { TabIcon(tab = tab, selected = isSelected) },
-                                    label = { Text(tabLabel(tab)) },
-                                    colors = NavigationBarItemDefaults.colors(
-                                        selectedIconColor = CyanSignal,
-                                        selectedTextColor = CyanSignal,
-                                        indicatorColor = CyanContainer,
-                                        unselectedIconColor = TextSecondary,
-                                        unselectedTextColor = TextSecondary
-                                    ),
-                                    modifier = Modifier.testTag("tab_${tab.name.lowercase()}")
-                                )
-                            }
-                        }
-                    }
-                }
-            ) { innerPadding ->
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(innerPadding)
-                ) {
-                    statusBanner?.let { bannerMsg ->
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 8.dp),
-                            shape = MaterialTheme.shapes.small,
-                            color = StudioPanel,
-                            border = BorderStroke(1.dp, StudioBorder)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
+                        )
+                    },
+                    bottomBar = {
+                        if (!useNavRail) {
+                            NavigationBar(
+                                containerColor = StudioRack,
+                                tonalElevation = 0.dp
                             ) {
-                                Text(
-                                    text = bannerMsg,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                IconButton(onClick = viewModel::dismissBanner) {
-                                    Icon(
-                                        imageVector = Icons.Filled.Close,
-                                        contentDescription = "Dismiss notification",
-                                        tint = TextSecondary
+                                StudioTab.entries.forEach { tab ->
+                                    val isSelected = selectedTab == tab
+                                    NavigationBarItem(
+                                        selected = isSelected,
+                                        onClick = { viewModel.selectTab(tab) },
+                                        icon = { TabIcon(tab = tab, selected = isSelected) },
+                                        label = { Text(tabLabel(tab)) },
+                                        colors = NavigationBarItemDefaults.colors(
+                                            selectedIconColor = CyanSignal,
+                                            selectedTextColor = CyanSignal,
+                                            indicatorColor = CyanContainer,
+                                            unselectedIconColor = TextSecondary,
+                                            unselectedTextColor = TextSecondary
+                                        ),
+                                        modifier = Modifier.testTag("tab_${tab.name.lowercase()}")
                                     )
                                 }
                             }
                         }
                     }
+                ) { innerPadding ->
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(innerPadding)
+                    ) {
+                        statusBanner?.let { bannerMsg ->
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                                shape = MaterialTheme.shapes.small,
+                                color = StudioPanel,
+                                border = BorderStroke(1.dp, StudioBorder)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = bannerMsg,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    IconButton(onClick = viewModel::dismissBanner) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Close,
+                                            contentDescription = "Dismiss notification",
+                                            tint = TextSecondary
+                                        )
+                                    }
+                                }
+                            }
+                        }
 
-                    when (selectedTab) {
-                        StudioTab.RECORDER -> RecorderScreen(
-                            hasMicPermission = hasMicPermission,
-                            hardwareState = hardwareState,
-                            recordingStatus = recordingStatus,
-                            metrics = metrics,
-                            voiceChangerConfig = voiceChangerConfig,
-                            effectsConfig = effectsConfig,
-                            monitoringConfig = monitoringConfig,
-                            recordings = recordings,
-                            playbackState = playbackState,
-                            onRequestMicPermission = requestPermissions,
-                            onOpenAppSettings = openAppSettings,
-                            onRefreshDevices = viewModel::refreshDevices,
-                            onStartRecording = viewModel::startRecording,
-                            onPauseRecording = viewModel::pauseRecording,
-                            onResumeRecording = viewModel::resumeRecording,
-                            onStopRecording = viewModel::stopRecording,
-                            onResetClips = viewModel::resetClipCounter,
-                            onTogglePlayback = viewModel::togglePlayback,
-                            onSeekPlayback = viewModel::seekPlayback,
-                            onRenameRecording = viewModel::renameRecording,
-                            onDeleteRecording = viewModel::deleteRecording,
-                            onShareRecording = shareRecording
-                        )
+                        when (selectedTab) {
+                            StudioTab.RECORDER -> RecorderScreen(
+                                hasMicPermission = hasMicPermission,
+                                hardwareState = hardwareState,
+                                recordingStatus = recordingStatus,
+                                metrics = metrics,
+                                voiceChangerConfig = voiceChangerConfig,
+                                effectsConfig = effectsConfig,
+                                userEffectPresets = userEffectPresets,
+                                monitoringConfig = monitoringConfig,
+                                recordings = recordings,
+                                playbackState = playbackState,
+                                importedPlaybackState = importedPlaybackState,
+                                onRequestMicPermission = requestPermissions,
+                                onOpenAppSettings = openAppSettings,
+                                onRefreshDevices = viewModel::refreshDevices,
+                                onStartRecording = viewModel::startRecording,
+                                onPauseRecording = viewModel::pauseRecording,
+                                onResumeRecording = viewModel::resumeRecording,
+                                onStopRecording = viewModel::stopRecording,
+                                onResetClips = viewModel::resetClipCounter,
+                                onOpenImportAudio = viewModel::openImportSheet,
+                                onToggleImportedPlayPause = viewModel::toggleImportedPlayback,
+                                onSeekImportedPlayback = viewModel::seekImportedPlayback,
+                                onClearImportedAudio = viewModel::clearImportedAudio,
+                                onSaveAndShareImportedAudio = launchSaveAndShareExport,
+                                onPitchCorrectionChanged = viewModel::updatePitchCorrectionConfig,
+                                onPitchFormantChanged = viewModel::updatePitchFormantConfig,
+                                onEqualizerChanged = viewModel::updateEqualizerConfig,
+                                onCompressionChanged = viewModel::updateCompressionConfig,
+                                onSaturationChanged = viewModel::updateSaturationConfig,
+                                onReverbChanged = viewModel::updateReverbConfig,
+                                onDelayChanged = viewModel::updateEchoConfig,
+                                onNoiseGateChanged = viewModel::updateNoiseGateConfig,
+                                onDeEsserChanged = viewModel::updateDeEsserConfig,
+                                onLimiterChanged = viewModel::updateLimiterConfig,
+                                onResetStudioEffect = viewModel::resetStudioEffect,
+                                onSaveStudioPreset = viewModel::saveUserEffectPreset,
+                                onLoadStudioPreset = viewModel::loadEffectPreset,
+                                onDeleteUserPreset = viewModel::deleteUserEffectPreset,
+                                onTogglePlayback = viewModel::togglePlayback,
+                                onSeekPlayback = viewModel::seekPlayback,
+                                onRenameRecording = viewModel::renameRecording,
+                                onDeleteRecording = viewModel::deleteRecording,
+                                onShareRecording = shareRecording
+                            )
 
-                        StudioTab.VOICE_CHANGER -> VoiceChangerScreen(
-                            config = voiceChangerConfig,
-                            monitoringConfig = monitoringConfig,
-                            hardwareState = hardwareState,
-                            metrics = metrics,
-                            onEnabledChanged = viewModel::setVoiceChangerEnabled,
-                            onSelectPreset = viewModel::selectVoicePreset,
-                            onResetPreset = viewModel::resetVoicePresetToDefault,
-                            onPitchLevelChanged = viewModel::updateVoicePitchLevel,
-                            onToneLevelChanged = viewModel::updateVoiceToneLevel,
-                            onClarityChanged = viewModel::updateVoiceClarity,
-                            onLivePreviewToggle = viewModel::setLiveVoicePreviewEnabled,
-                            onMonitoringDelayChanged = viewModel::updateMonitoringDelaySlider,
-                            onResetMonitoringDelay = viewModel::resetMonitoringDelayToDefault,
-                            onMonitoringVolumeChanged = viewModel::updateMonitoringVolume,
-                            onEchoCancellationToggle = viewModel::setEchoCancellationEnabled
-                        )
+                            StudioTab.VOICE_CHANGER -> VoiceChangerScreen(
+                                config = voiceChangerConfig,
+                                monitoringConfig = monitoringConfig,
+                                hardwareState = hardwareState,
+                                metrics = metrics,
+                                onEnabledChanged = viewModel::setVoiceChangerEnabled,
+                                onSelectPreset = viewModel::selectVoicePreset,
+                                onResetPreset = viewModel::resetVoicePresetToDefault,
+                                onPitchLevelChanged = viewModel::updateVoicePitchLevel,
+                                onToneLevelChanged = viewModel::updateVoiceToneLevel,
+                                onClarityChanged = viewModel::updateVoiceClarity,
+                                onLivePreviewToggle = viewModel::setLiveVoicePreviewEnabled,
+                                onMonitoringDelayChanged = viewModel::updateMonitoringDelaySlider,
+                                onResetMonitoringDelay = viewModel::resetMonitoringDelayToDefault,
+                                onMonitoringVolumeChanged = viewModel::updateMonitoringVolume,
+                                onEchoCancellationToggle = viewModel::setEchoCancellationEnabled
+                            )
 
-                        StudioTab.EFFECTS -> EffectsScreen(
-                            config = effectsConfig,
-                            onNoiseGateChanged = viewModel::updateNoiseGateConfig,
-                            onLowPassChanged = viewModel::updateLowPassConfig,
-                            onHighPassChanged = viewModel::updateHighPassConfig,
-                            onEqualizerChanged = viewModel::updateEqualizerConfig,
-                            onReverbChanged = viewModel::updateReverbConfig,
-                            onEchoChanged = viewModel::updateEchoConfig,
-                            onHallChanged = viewModel::updateHallConfig
-                        )
+                            StudioTab.EFFECTS -> EffectsScreen(
+                                config = effectsConfig,
+                                onNoiseGateChanged = viewModel::updateNoiseGateConfig,
+                                onLowPassChanged = viewModel::updateLowPassConfig,
+                                onHighPassChanged = viewModel::updateHighPassConfig,
+                                onEqualizerChanged = viewModel::updateEqualizerConfig,
+                                onReverbChanged = viewModel::updateReverbConfig,
+                                onEchoChanged = viewModel::updateEchoConfig,
+                                onHallChanged = viewModel::updateHallConfig
+                            )
+                        }
                     }
                 }
             }
+        }
+
+        if (showImportSheet) {
+            ImportAudioOverlay(
+                hasAudioPermission = hasAudioPermission,
+                audioItems = deviceAudioFiles,
+                isLoadingAudio = isLoadingDeviceAudio,
+                onRequestAudioPermission = {
+                    audioPermissionLauncher.launch(audioPermissionString)
+                },
+                onRefreshAudioList = viewModel::loadDeviceAudioFiles,
+                onLaunchVideoPicker = {
+                    videoPickerLauncher.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
+                    )
+                },
+                onSelectAudioItem = viewModel::importAudioItem,
+                onDismiss = viewModel::closeImportSheet
+            )
         }
     }
 }

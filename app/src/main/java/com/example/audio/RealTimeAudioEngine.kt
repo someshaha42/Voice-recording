@@ -17,11 +17,10 @@ import android.os.Build
 import android.os.Process
 import androidx.core.content.ContextCompat
 import com.example.dsp.EffectsRackConfig
-import com.example.dsp.EffectsRackProcessor
 import com.example.dsp.HighPassFilter
 import com.example.dsp.PacketLossConcealment
+import com.example.dsp.StudioDspPipeline
 import com.example.dsp.VoiceChangerConfig
-import com.example.dsp.VoiceChangerDsp
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -55,8 +54,7 @@ class RealTimeAudioEngine(
 
     private val highPassFilter = HighPassFilter(120.0, AudioConfig.OUTPUT_SAMPLE_RATE_HZ)
     private val packetLossConcealment = PacketLossConcealment(AudioConfig.OUTPUT_SAMPLE_RATE_HZ)
-    private val effectsRack = EffectsRackProcessor(AudioConfig.OUTPUT_SAMPLE_RATE_HZ)
-    private val voiceChanger = VoiceChangerDsp(AudioConfig.OUTPUT_SAMPLE_RATE_HZ)
+    private val dspPipeline = StudioDspPipeline(AudioConfig.OUTPUT_SAMPLE_RATE_HZ)
     private val monitoringDelayLine = MonitoringDelayLine(AudioConfig.OUTPUT_SAMPLE_RATE_HZ)
 
     private val _recordingStatus = MutableStateFlow(RecordingStatus.IDLE)
@@ -122,11 +120,11 @@ class RealTimeAudioEngine(
     }
 
     fun updateEffectsRack(config: EffectsRackConfig) {
-        effectsRack.updateConfig(config)
+        dspPipeline.updateEffectsConfig(config)
     }
 
     fun updateVoiceChanger(config: VoiceChangerConfig) {
-        voiceChanger.updateConfig(config)
+        dspPipeline.updateVoiceChangerConfig(config)
     }
 
     fun setAppForeground(foreground: Boolean) {
@@ -378,8 +376,7 @@ class RealTimeAudioEngine(
 
         highPassFilter.reset()
         packetLossConcealment.reset()
-        effectsRack.reset()
-        voiceChanger.reset()
+        dspPipeline.reset()
         monitoringDelayLine.reset()
         smoothedMonitorGain = _monitoringConfig.value.previewVolumePercent / 100f
 
@@ -556,16 +553,11 @@ class RealTimeAudioEngine(
                         trackShortBuffer = ShortArray(count48k * 2)
                     }
 
-                    // 5. Noise Gate (runs before Voice Changer so room noise doesn't trigger pitch tracker)
-                    effectsRack.processPreVoiceChanger(resampled48kBuffer, count48k)
+                    // 5. Unified Studio DSP Pipeline: Noise Gate -> Pitch Correction -> Voice Changer ->
+                    //    Pitch & Formant -> HPF/LPF -> EQ -> De-Esser -> Comp -> Sat -> Delay -> Reverb -> Hall -> Limiter
+                    dspPipeline.processInPlace(resampled48kBuffer, count48k)
 
-                    // 6. Voice Changer DSP (independent module; completely bypassed when OFF)
-                    voiceChanger.processInPlace(resampled48kBuffer, count48k)
-
-                    // 7. Post-Voice-Changer Effects (High-pass, Low-pass, Equalizer, Echo, Reverb, Hall)
-                    effectsRack.processPostVoiceChanger(resampled48kBuffer, count48k)
-
-                    // 8. Branch B: Recording Output (ZERO monitoring delay, 100% unity recording gain!)
+                    // 6. Branch B: Recording Output (ZERO monitoring delay, 100% unity recording gain!)
                     val writer = wavWriter
                     if (writer != null && writer.isOpen && isRecordingActive) {
                         val clips = writer.writeSamples(resampled48kBuffer, count48k)
@@ -625,8 +617,8 @@ class RealTimeAudioEngine(
                         peakDb = peakDb,
                         isClipping = clipHoldFrames > 0,
                         clipCount = accumulatedClipCount,
-                        gateOpen = effectsRack.noiseGate.lastIsGateOpen,
-                        gateGainReductionDb = effectsRack.noiseGate.lastGainReductionDb,
+                        gateOpen = dspPipeline.noiseGate.lastIsGateOpen,
+                        gateGainReductionDb = dspPipeline.noiseGate.lastGainReductionDb,
                         recordingDurationMs = wavWriter?.getRecordedDurationMs() ?: _metrics.value.recordingDurationMs,
                         estimatedMonitoringLatencyMs = estLatency
                     )
@@ -683,8 +675,12 @@ class RealTimeAudioEngine(
         trackFrames: Int
     ): Int {
         val captureMs = (captureFrames * 1000f) / inputRateHz.coerceAtLeast(8000)
-        val vc = voiceChanger.getConfig()
-        val dspMs = if (vc.enabled && vc.pitchLevelPercent > 0) 30.8f else 0f
+        val vc = dspPipeline.getVoiceChangerConfig()
+        val fx = dspPipeline.getEffectsConfig()
+        val pitchActive = (vc.enabled && vc.pitchLevelPercent > 0) ||
+            fx.pitchCorrection.enabled ||
+            fx.pitchFormant.enabled
+        val dspMs = if (pitchActive) 30.8f else 0f
         val trackMs = (trackFrames * 1000f) / AudioConfig.OUTPUT_SAMPLE_RATE_HZ
         val addedMs = _monitoringConfig.value.addedOutputDelayMs.toFloat()
         return (captureMs + dspMs + trackMs * 0.5f + addedMs).roundToInt().coerceAtLeast(5)

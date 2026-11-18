@@ -1,6 +1,5 @@
 package com.example.ui.screens
 
-import android.content.Intent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -21,6 +20,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FiberManualRecord
@@ -52,7 +52,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -61,20 +60,33 @@ import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.audio.AudioConfig
 import com.example.audio.AudioHardwareState
+import com.example.audio.ImportedPlaybackState
 import com.example.audio.LiveAudioMetrics
 import com.example.audio.MonitoringConfig
 import com.example.audio.PlaybackUiState
 import com.example.audio.RecordingStatus
 import com.example.data.RecordingItem
+import com.example.dsp.CompressionConfig
+import com.example.dsp.DeEsserConfig
+import com.example.dsp.EchoConfig
 import com.example.dsp.EffectsRackConfig
+import com.example.dsp.EqualizerConfig
+import com.example.dsp.LimiterConfig
+import com.example.dsp.NoiseGateConfig
+import com.example.dsp.PitchCorrectionConfig
+import com.example.dsp.PitchFormantConfig
+import com.example.dsp.ReverbConfig
+import com.example.dsp.SaturationConfig
+import com.example.dsp.StudioEffectPreset
+import com.example.dsp.StudioEffectType
 import com.example.dsp.VoiceChangerConfig
 import com.example.ui.components.HardwareStatusCard
 import com.example.ui.components.StudioLevelMeterCard
+import com.example.ui.components.studioEffectsSection
 import com.example.ui.theme.AmberCaution
 import com.example.ui.theme.AmberContainer
 import com.example.ui.theme.CyanContainer
 import com.example.ui.theme.CyanSignal
-import com.example.ui.theme.EmeraldContainer
 import com.example.ui.theme.EmeraldSafe
 import com.example.ui.theme.RecordCoral
 import com.example.ui.theme.RecordCoralContainer
@@ -96,9 +108,11 @@ fun RecorderScreen(
     metrics: LiveAudioMetrics,
     voiceChangerConfig: VoiceChangerConfig,
     effectsConfig: EffectsRackConfig,
+    userEffectPresets: List<StudioEffectPreset>,
     monitoringConfig: MonitoringConfig,
     recordings: List<RecordingItem>,
     playbackState: PlaybackUiState,
+    importedPlaybackState: ImportedPlaybackState,
     onRequestMicPermission: () -> Unit,
     onOpenAppSettings: () -> Unit,
     onRefreshDevices: () -> Unit,
@@ -107,6 +121,25 @@ fun RecorderScreen(
     onResumeRecording: () -> Unit,
     onStopRecording: () -> Unit,
     onResetClips: () -> Unit,
+    onOpenImportAudio: () -> Unit,
+    onToggleImportedPlayPause: () -> Unit,
+    onSeekImportedPlayback: (Long) -> Unit,
+    onClearImportedAudio: () -> Unit,
+    onSaveAndShareImportedAudio: () -> Unit,
+    onPitchCorrectionChanged: (PitchCorrectionConfig) -> Unit,
+    onPitchFormantChanged: (PitchFormantConfig) -> Unit,
+    onEqualizerChanged: (EqualizerConfig) -> Unit,
+    onCompressionChanged: (CompressionConfig) -> Unit,
+    onSaturationChanged: (SaturationConfig) -> Unit,
+    onReverbChanged: (ReverbConfig) -> Unit,
+    onDelayChanged: (EchoConfig) -> Unit,
+    onNoiseGateChanged: (NoiseGateConfig) -> Unit,
+    onDeEsserChanged: (DeEsserConfig) -> Unit,
+    onLimiterChanged: (LimiterConfig) -> Unit,
+    onResetStudioEffect: (StudioEffectType) -> Unit,
+    onSaveStudioPreset: (StudioEffectType, String) -> Unit,
+    onLoadStudioPreset: (StudioEffectPreset) -> Unit,
+    onDeleteUserPreset: (String) -> Unit,
     onTogglePlayback: (RecordingItem) -> Unit,
     onSeekPlayback: (Long) -> Unit,
     onRenameRecording: (RecordingItem, String) -> Unit,
@@ -124,12 +157,13 @@ fun RecorderScreen(
         LazyColumn(
             modifier = Modifier
                 .widthIn(max = 640.dp)
-                .fillMaxSize(),
+                .fillMaxSize()
+                .testTag("home_lazy_column"),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             if (!hasMicPermission) {
-                item {
+                item(key = "mic_permission_card") {
                     PermissionPromptCard(
                         onGrantClick = onRequestMicPermission,
                         onOpenSettings = onOpenAppSettings
@@ -137,14 +171,14 @@ fun RecorderScreen(
                 }
             }
 
-            item {
+            item(key = "hardware_status_card") {
                 HardwareStatusCard(
                     hardwareState = hardwareState,
                     onRefreshDevices = onRefreshDevices
                 )
             }
 
-            item {
+            item(key = "transport_console_card") {
                 TransportConsoleCard(
                     hasMicPermission = hasMicPermission,
                     recordingStatus = recordingStatus,
@@ -153,20 +187,53 @@ fun RecorderScreen(
                     effectsConfig = effectsConfig,
                     monitoringConfig = monitoringConfig,
                     onStartRecording = onStartRecording,
+                    onOpenImportAudio = onOpenImportAudio,
                     onPauseRecording = onPauseRecording,
                     onResumeRecording = onResumeRecording,
                     onStopRecording = onStopRecording
                 )
             }
 
-            item {
+            if (importedPlaybackState.source != null || importedPlaybackState.isImporting) {
+                item(key = "imported_audio_studio_card") {
+                    ImportedAudioStudioCard(
+                        playbackState = importedPlaybackState,
+                        onTogglePlayPause = onToggleImportedPlayPause,
+                        onSeek = onSeekImportedPlayback,
+                        onChangeSource = onOpenImportAudio,
+                        onClearSource = onClearImportedAudio,
+                        onSaveAndShare = onSaveAndShareImportedAudio
+                    )
+                }
+            }
+
+            item(key = "level_meter_card") {
                 StudioLevelMeterCard(
                     metrics = metrics,
                     onResetClips = onResetClips
                 )
             }
 
-            item {
+            studioEffectsSection(
+                effectsConfig = effectsConfig,
+                userPresets = userEffectPresets,
+                onPitchCorrectionChanged = onPitchCorrectionChanged,
+                onPitchFormantChanged = onPitchFormantChanged,
+                onEqualizerChanged = onEqualizerChanged,
+                onCompressionChanged = onCompressionChanged,
+                onSaturationChanged = onSaturationChanged,
+                onReverbChanged = onReverbChanged,
+                onDelayChanged = onDelayChanged,
+                onNoiseGateChanged = onNoiseGateChanged,
+                onDeEsserChanged = onDeEsserChanged,
+                onLimiterChanged = onLimiterChanged,
+                onResetEffect = onResetStudioEffect,
+                onSavePreset = onSaveStudioPreset,
+                onLoadPreset = onLoadStudioPreset,
+                onDeleteUserPreset = onDeleteUserPreset
+            )
+
+            item(key = "recordings_header") {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -317,6 +384,7 @@ private fun TransportConsoleCard(
     effectsConfig: EffectsRackConfig,
     monitoringConfig: MonitoringConfig,
     onStartRecording: () -> Unit,
+    onOpenImportAudio: () -> Unit,
     onPauseRecording: () -> Unit,
     onResumeRecording: () -> Unit,
     onStopRecording: () -> Unit
@@ -533,6 +601,36 @@ private fun TransportConsoleCard(
                         Text("Stop & Save", style = MaterialTheme.typography.titleSmall)
                     }
                 }
+            }
+
+            // Secondary main action: Import Audio (directly below Start Recording)
+            OutlinedButton(
+                onClick = onOpenImportAudio,
+                enabled = recordingStatus == RecordingStatus.IDLE,
+                border = BorderStroke(
+                    1.dp,
+                    if (recordingStatus == RecordingStatus.IDLE) CyanSignal.copy(alpha = 0.75f) else StudioBorder
+                ),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = CyanContainer.copy(alpha = 0.45f),
+                    contentColor = CyanSignal
+                ),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp)
+                    .testTag("import_audio_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.AudioFile,
+                    contentDescription = stringResource(R.string.cd_import_audio),
+                    modifier = Modifier.size(19.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = stringResource(R.string.import_audio),
+                    style = MaterialTheme.typography.titleSmall
+                )
             }
         }
     }

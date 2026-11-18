@@ -49,6 +49,7 @@ import com.example.dsp.HighPassConfig
 import com.example.dsp.LowPassConfig
 import com.example.dsp.NoiseGateConfig
 import com.example.dsp.ReverbConfig
+import com.example.ui.components.EqualizerResponseGraph
 import com.example.ui.theme.CyanSignal
 import com.example.ui.theme.EmeraldContainer
 import com.example.ui.theme.EmeraldSafe
@@ -268,6 +269,7 @@ fun EffectsScreen(
                     onEnabledChanged = { onEqualizerChanged(eq.copy(enabled = it)) },
                     onReset = { onEqualizerChanged(EqualizerConfig(enabled = eq.enabled)) }
                 ) {
+                    EqualizerResponseGraph(config = eq)
                     EffectSliderRow(
                         label = "Mix",
                         valueText = "${eq.mixPercent}%",
@@ -392,6 +394,13 @@ fun EffectsScreen(
                         value = rev.roomSizePercent.toFloat(),
                         valueRange = 0f..100f,
                         onValueChange = { onReverbChanged(rev.copy(roomSizePercent = it.roundToInt())) }
+                    )
+                    EffectSliderRow(
+                        label = "Decay Time",
+                        valueText = String.format(Locale.US, "%.1f s", rev.decayTimeSec),
+                        value = rev.decayTimeSec,
+                        valueRange = 0.2f..8.0f,
+                        onValueChange = { onReverbChanged(rev.copy(decayTimeSec = (it * 10f).roundToInt() / 10f)) }
                     )
                     EffectSliderRow(
                         label = "Damping",

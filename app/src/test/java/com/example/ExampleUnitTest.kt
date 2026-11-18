@@ -6,19 +6,36 @@ import com.example.audio.MonitoringConfig
 import com.example.audio.MonitoringDelayLine
 import com.example.audio.MonitoringLatencyZone
 import com.example.audio.WavPcmWriter
+import com.example.dsp.CompressionConfig
+import com.example.dsp.CompressionProcessor
+import com.example.dsp.DeEsserConfig
+import com.example.dsp.DeEsserProcessor
 import com.example.dsp.EchoConfig
 import com.example.dsp.EffectsRackConfig
 import com.example.dsp.EffectsRackProcessor
 import com.example.dsp.EqualizerConfig
+import com.example.dsp.EqualizerEffect
 import com.example.dsp.FilterSlope
 import com.example.dsp.HallConfig
 import com.example.dsp.HighPassConfig
 import com.example.dsp.HighPassFilter
+import com.example.dsp.LimiterConfig
+import com.example.dsp.LimiterProcessor
 import com.example.dsp.LowPassConfig
+import com.example.dsp.MusicalKey
+import com.example.dsp.MusicalScale
 import com.example.dsp.NoiseGateConfig
 import com.example.dsp.NoiseGateProcessor
 import com.example.dsp.PacketLossConcealment
+import com.example.dsp.PitchCorrectionConfig
+import com.example.dsp.PitchCorrectionProcessor
+import com.example.dsp.PitchFormantConfig
+import com.example.dsp.PitchFormantProcessor
 import com.example.dsp.ReverbConfig
+import com.example.dsp.ReverbPreset
+import com.example.dsp.SaturationConfig
+import com.example.dsp.SaturationProcessor
+import com.example.dsp.StudioDspPipeline
 import com.example.dsp.VoiceChangerConfig
 import com.example.dsp.VoiceChangerDsp
 import com.example.dsp.VoicePreset
@@ -30,6 +47,7 @@ import java.io.File
 import java.io.RandomAccessFile
 import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.pow
 import kotlin.math.sin
 
 class ExampleUnitTest {
@@ -185,6 +203,156 @@ class ExampleUnitTest {
             assertFalse(s.isInfinite())
             assertTrue(abs(s) <= 1.0f)
         }
+    }
+
+    @Test
+    fun studio_dsp_pipeline_processes_all_ten_effects_plus_voice_changer_cleanly() {
+        val pipeline = StudioDspPipeline(48_000)
+        pipeline.updateEffectsConfig(
+            EffectsRackConfig(
+                pitchCorrection = PitchCorrectionConfig(enabled = true, key = MusicalKey.C, scale = MusicalScale.MAJOR),
+                pitchFormant = PitchFormantConfig(enabled = true, pitchShiftSt = 2.0f, formantShiftSt = 1.0f),
+                equalizer = EqualizerConfig(enabled = true, lowGainDb = 3f, mid2GainDb = 2f, highGainDb = 2.5f),
+                compression = CompressionConfig(enabled = true, thresholdDb = -20f, ratio = 4f),
+                saturation = SaturationConfig(enabled = true, drivePercent = 40, warmthPercent = 50),
+                reverb = ReverbPreset.HALL.applyTo(enabled = true),
+                echo = EchoConfig(enabled = true, tempoSync = true, bpm = 124, highCutHz = 5500f),
+                noiseGate = NoiseGateConfig(enabled = true, thresholdDb = -55f),
+                deEsser = DeEsserConfig(enabled = true, frequencyHz = 6200f, reductionPercent = 60),
+                limiter = LimiterConfig(enabled = true, ceilingDb = -1.0f, inputGainDb = 3.0f)
+            )
+        )
+        pipeline.updateVoiceChangerConfig(VoicePreset.FEMALE.defaultConfig(enabled = true))
+        pipeline.reset()
+
+        val block = FloatArray(1024)
+        for (b in 0 until 8) {
+            for (i in block.indices) {
+                val n = b * block.size + i
+                block[i] = (0.35f * sin(2.0 * PI * 220.0 * n / 48000.0) +
+                    0.10f * sin(2.0 * PI * 6200.0 * n / 48000.0)).toFloat()
+            }
+            pipeline.processInPlace(block, block.size)
+            for (s in block) {
+                assertFalse(s.isNaN())
+                assertFalse(s.isInfinite())
+                assertTrue("Output exceeds ceiling: $s", abs(s) <= 1.0f)
+            }
+        }
+    }
+
+    @Test
+    fun studio_processors_behave_as_designed_individually() {
+        // 1. Pitch Correction detects vocal pitch cleanly
+        val pitchCorr = PitchCorrectionProcessor(48_000)
+        pitchCorr.updateConfig(
+            PitchCorrectionConfig(
+                enabled = true,
+                key = MusicalKey.A,
+                scale = MusicalScale.MAJOR,
+                correctionStrengthPercent = 90,
+                retuneSpeedMs = 10
+            )
+        )
+        pitchCorr.reset()
+        val a4Buf = FloatArray(1024)
+        for (b in 0 until 6) {
+            for (i in a4Buf.indices) {
+                val n = b * a4Buf.size + i
+                a4Buf[i] = (0.4f * sin(2.0 * PI * 220.0 * n / 48000.0)).toFloat()
+            }
+            pitchCorr.processInPlace(a4Buf, a4Buf.size)
+        }
+        assertTrue(pitchCorr.lastDetectedNoteLabel.startsWith("A"))
+
+        // 2. Pitch & Formant Shifter runs stably
+        val pf = PitchFormantProcessor(48_000)
+        pf.updateConfig(PitchFormantConfig(enabled = true, pitchShiftSt = -3f, formantShiftSt = -2f))
+        pf.reset()
+        val pfBuf = FloatArray(2048) { i -> (0.4f * sin(2.0 * PI * 260.0 * i / 48000.0)).toFloat() }
+        pf.processInPlace(pfBuf, pfBuf.size)
+        assertTrue(pfBuf.all { !it.isNaN() && abs(it) <= 1.0f })
+
+        // 3. Compressor reduces loud peaks above threshold and reports negative GR
+        val comp = CompressionProcessor(48_000)
+        comp.updateConfig(
+            CompressionConfig(
+                enabled = true,
+                thresholdDb = -24f,
+                ratio = 8f,
+                attackMs = 1f,
+                releaseMs = 100f,
+                makeupGainDb = 0f,
+                outputGainDb = 0f
+            )
+        )
+        comp.reset()
+        val loud = FloatArray(4096) { i -> (0.85f * sin(2.0 * PI * 300.0 * i / 48000.0)).toFloat() }
+        comp.processInPlace(loud, loud.size)
+        assertTrue("Expected negative gain reduction, got ${comp.lastGainReductionDb}", comp.lastGainReductionDb < -5f)
+        assertTrue("Expected attenuated tail amplitude", loud.takeLast(512).maxOf { abs(it) } < 0.6f)
+
+        // 4. Saturation adds harmonics safely without runaway
+        val sat = SaturationProcessor(48_000)
+        sat.updateConfig(SaturationConfig(enabled = true, drivePercent = 70, warmthPercent = 60, mixPercent = 100))
+        sat.reset()
+        val satBuf = FloatArray(2048) { i -> (0.5f * sin(2.0 * PI * 200.0 * i / 48000.0)).toFloat() }
+        sat.processInPlace(satBuf, satBuf.size)
+        assertTrue(satBuf.all { !it.isNaN() && abs(it) <= 1.2f })
+
+        // 5. De-Esser attenuates intense 6.5 kHz sibilance
+        val deEsser = DeEsserProcessor(48_000)
+        deEsser.updateConfig(
+            DeEsserConfig(
+                enabled = true,
+                frequencyHz = 6500f,
+                thresholdDb = -30f,
+                reductionPercent = 90,
+                bandwidthQ = 2.0f,
+                mixPercent = 100
+            )
+        )
+        deEsser.reset()
+        val sib = FloatArray(8192) { i -> (0.6f * sin(2.0 * PI * 6500.0 * i / 48000.0)).toFloat() }
+        deEsser.processInPlace(sib, sib.size)
+        val tailSibPeak = sib.takeLast(1024).maxOf { abs(it) }
+        assertTrue("Expected De-Esser to attenuate 6.5 kHz sibilance below 0.35, got $tailSibPeak", tailSibPeak < 0.35f)
+
+        // 6. Brickwall Limiter strictly enforces ceiling dB under hot drive
+        val limiter = LimiterProcessor(48_000)
+        val ceilingDb = -1.5f
+        val ceilingLin = 10f.pow(ceilingDb / 20f)
+        limiter.updateConfig(
+            LimiterConfig(
+                enabled = true,
+                thresholdDb = -6f,
+                ceilingDb = ceilingDb,
+                inputGainDb = 12f,
+                outputGainDb = 0f
+            )
+        )
+        limiter.reset()
+        val hot = FloatArray(2048) { i -> (0.8f * sin(2.0 * PI * 400.0 * i / 48000.0)).toFloat() }
+        limiter.processInPlace(hot, hot.size)
+        val maxAbs = hot.maxOf { abs(it) }
+        assertTrue("Expected limited peak <= $ceilingLin, got $maxAbs", maxAbs <= ceilingLin + 0.001f)
+    }
+
+    @Test
+    fun equalizer_magnitude_curve_reflects_boost_and_cut() {
+        val eq = EqualizerConfig(
+            enabled = true,
+            mixPercent = 100,
+            lowFreqHz = 100f,
+            lowGainDb = 6.0f,
+            highFreqHz = 10000f,
+            highGainDb = -6.0f
+        )
+        val freqs = floatArrayOf(50f, 1000f, 16000f)
+        val curve = EqualizerEffect.computeMagnitudeCurveDb(eq, freqs)
+        assertTrue("Expected bass boost > 3 dB at 50 Hz, got ${curve[0]}", curve[0] > 3.0f)
+        assertTrue("Expected near-0 dB around 1 kHz, got ${curve[1]}", abs(curve[1]) < 1.5f)
+        assertTrue("Expected treble cut < -3 dB at 16 kHz, got ${curve[2]}", curve[2] < -3.0f)
     }
 
     @Test

@@ -717,6 +717,20 @@ internal class BiquadFilter {
         a2 = ((1.0 - alpha) / a0).toFloat()
     }
 
+    fun setBandPass(sampleRateHz: Int, freqHz: Double, q: Double) {
+        val clampedFreq = freqHz.coerceIn(20.0, sampleRateHz * 0.45)
+        val clampedQ = q.coerceIn(0.1, 10.0)
+        val w0 = 2.0 * PI * clampedFreq / sampleRateHz
+        val cosW0 = cos(w0)
+        val alpha = sin(w0) / (2.0 * clampedQ)
+        val a0 = 1.0 + alpha
+        b0 = (alpha / a0).toFloat()
+        b1 = 0f
+        b2 = (-alpha / a0).toFloat()
+        a1 = (-2.0 * cosW0 / a0).toFloat()
+        a2 = ((1.0 - alpha) / a0).toFloat()
+    }
+
     fun setPeaking(sampleRateHz: Int, freqHz: Double, q: Double, gainDb: Double) {
         if (abs(gainDb) < 0.02) {
             setBypass()
@@ -736,17 +750,18 @@ internal class BiquadFilter {
         a2 = ((1.0 - alpha / a) / a0).toFloat()
     }
 
-    fun setLowShelf(sampleRateHz: Int, freqHz: Double, gainDb: Double) {
+    fun setLowShelf(sampleRateHz: Int, freqHz: Double, gainDb: Double, q: Double = 0.70710678) {
         if (abs(gainDb) < 0.02) {
             setBypass()
             return
         }
         val clampedFreq = freqHz.coerceIn(20.0, sampleRateHz * 0.45)
+        val clampedQ = q.coerceIn(0.2, 4.0)
         val a = 10.0.pow(gainDb / 40.0)
         val w0 = 2.0 * PI * clampedFreq / sampleRateHz
         val cosW0 = cos(w0)
         val sinW0 = sin(w0)
-        val alpha = sinW0 / 2.0 * sqrt(2.0)
+        val alpha = sinW0 / (2.0 * clampedQ)
         val twoSqrtAAlpha = 2.0 * sqrt(a) * alpha
         val a0 = (a + 1.0) + (a - 1.0) * cosW0 + twoSqrtAAlpha
         b0 = (a * ((a + 1.0) - (a - 1.0) * cosW0 + twoSqrtAAlpha) / a0).toFloat()
@@ -756,17 +771,18 @@ internal class BiquadFilter {
         a2 = (((a + 1.0) + (a - 1.0) * cosW0 - twoSqrtAAlpha) / a0).toFloat()
     }
 
-    fun setHighShelf(sampleRateHz: Int, freqHz: Double, gainDb: Double) {
+    fun setHighShelf(sampleRateHz: Int, freqHz: Double, gainDb: Double, q: Double = 0.70710678) {
         if (abs(gainDb) < 0.02) {
             setBypass()
             return
         }
         val clampedFreq = freqHz.coerceIn(20.0, sampleRateHz * 0.45)
+        val clampedQ = q.coerceIn(0.2, 4.0)
         val a = 10.0.pow(gainDb / 40.0)
         val w0 = 2.0 * PI * clampedFreq / sampleRateHz
         val cosW0 = cos(w0)
         val sinW0 = sin(w0)
-        val alpha = sinW0 / 2.0 * sqrt(2.0)
+        val alpha = sinW0 / (2.0 * clampedQ)
         val twoSqrtAAlpha = 2.0 * sqrt(a) * alpha
         val a0 = (a + 1.0) - (a - 1.0) * cosW0 + twoSqrtAAlpha
         b0 = (a * ((a + 1.0) + (a - 1.0) * cosW0 + twoSqrtAAlpha) / a0).toFloat()
@@ -774,5 +790,21 @@ internal class BiquadFilter {
         b2 = (a * ((a + 1.0) + (a - 1.0) * cosW0 - twoSqrtAAlpha) / a0).toFloat()
         a1 = (2.0 * ((a - 1.0) - (a + 1.0) * cosW0) / a0).toFloat()
         a2 = (((a + 1.0) - (a - 1.0) * cosW0 - twoSqrtAAlpha) / a0).toFloat()
+    }
+
+    fun magnitudeDbAt(sampleRateHz: Int, freqHz: Double): Double {
+        val w = 2.0 * PI * freqHz / sampleRateHz
+        val cosW = cos(w)
+        val cos2W = cos(2.0 * w)
+        val sinW = sin(w)
+        val sin2W = sin(2.0 * w)
+        val numRe = b0 + b1 * cosW + b2 * cos2W
+        val numIm = -(b1 * sinW + b2 * sin2W)
+        val denRe = 1.0 + a1 * cosW + a2 * cos2W
+        val denIm = -(a1 * sinW + a2 * sin2W)
+        val numMagSq = numRe * numRe + numIm * numIm
+        val denMagSq = (denRe * denRe + denIm * denIm).coerceAtLeast(1e-12)
+        val mag = sqrt(numMagSq / denMagSq).coerceAtLeast(1e-6)
+        return 20.0 * kotlin.math.log10(mag)
     }
 }

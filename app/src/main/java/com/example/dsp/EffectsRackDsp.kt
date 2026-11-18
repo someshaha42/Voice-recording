@@ -1,8 +1,10 @@
 package com.example.dsp
 
 import com.example.audio.AudioConfig
+import org.json.JSONObject
 import kotlin.math.abs
 import kotlin.math.floor
+import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.tanh
 
@@ -32,6 +34,7 @@ data class EqualizerConfig(
     val mixPercent: Int = 100,
     val lowFreqHz: Float = 120f,
     val lowGainDb: Float = 0f,
+    val lowQ: Float = 0.71f,
     val mid1FreqHz: Float = 400f,
     val mid1GainDb: Float = 0f,
     val mid1Q: Float = 0.71f,
@@ -42,29 +45,160 @@ data class EqualizerConfig(
     val mid3GainDb: Float = 0f,
     val mid3Q: Float = 1.00f,
     val highFreqHz: Float = 10000f,
-    val highGainDb: Float = 0f
-)
+    val highGainDb: Float = 0f,
+    val highQ: Float = 0.71f
+) {
+    fun toJson(): JSONObject = JSONObject().apply {
+        put("mixPercent", mixPercent)
+        put("lowFreqHz", lowFreqHz.toDouble())
+        put("lowGainDb", lowGainDb.toDouble())
+        put("lowQ", lowQ.toDouble())
+        put("mid1FreqHz", mid1FreqHz.toDouble())
+        put("mid1GainDb", mid1GainDb.toDouble())
+        put("mid1Q", mid1Q.toDouble())
+        put("mid2FreqHz", mid2FreqHz.toDouble())
+        put("mid2GainDb", mid2GainDb.toDouble())
+        put("mid2Q", mid2Q.toDouble())
+        put("mid3FreqHz", mid3FreqHz.toDouble())
+        put("mid3GainDb", mid3GainDb.toDouble())
+        put("mid3Q", mid3Q.toDouble())
+        put("highFreqHz", highFreqHz.toDouble())
+        put("highGainDb", highGainDb.toDouble())
+        put("highQ", highQ.toDouble())
+    }
+
+    companion object {
+        fun fromJson(obj: JSONObject, enabled: Boolean): EqualizerConfig {
+            val d = EqualizerConfig(enabled = enabled)
+            return d.copy(
+                mixPercent = obj.optInt("mixPercent", d.mixPercent).coerceIn(0, 100),
+                lowFreqHz = obj.optDouble("lowFreqHz", d.lowFreqHz.toDouble()).toFloat().coerceIn(20f, 500f),
+                lowGainDb = obj.optDouble("lowGainDb", d.lowGainDb.toDouble()).toFloat().coerceIn(-12f, 12f),
+                lowQ = obj.optDouble("lowQ", d.lowQ.toDouble()).toFloat().coerceIn(0.2f, 4f),
+                mid1FreqHz = obj.optDouble("mid1FreqHz", d.mid1FreqHz.toDouble()).toFloat().coerceIn(100f, 1500f),
+                mid1GainDb = obj.optDouble("mid1GainDb", d.mid1GainDb.toDouble()).toFloat().coerceIn(-12f, 12f),
+                mid1Q = obj.optDouble("mid1Q", d.mid1Q.toDouble()).toFloat().coerceIn(0.1f, 10f),
+                mid2FreqHz = obj.optDouble("mid2FreqHz", d.mid2FreqHz.toDouble()).toFloat().coerceIn(300f, 5000f),
+                mid2GainDb = obj.optDouble("mid2GainDb", d.mid2GainDb.toDouble()).toFloat().coerceIn(-12f, 12f),
+                mid2Q = obj.optDouble("mid2Q", d.mid2Q.toDouble()).toFloat().coerceIn(0.1f, 10f),
+                mid3FreqHz = obj.optDouble("mid3FreqHz", d.mid3FreqHz.toDouble()).toFloat().coerceIn(1000f, 12000f),
+                mid3GainDb = obj.optDouble("mid3GainDb", d.mid3GainDb.toDouble()).toFloat().coerceIn(-12f, 12f),
+                mid3Q = obj.optDouble("mid3Q", d.mid3Q.toDouble()).toFloat().coerceIn(0.1f, 10f),
+                highFreqHz = obj.optDouble("highFreqHz", d.highFreqHz.toDouble()).toFloat().coerceIn(2000f, 16000f),
+                highGainDb = obj.optDouble("highGainDb", d.highGainDb.toDouble()).toFloat().coerceIn(-12f, 12f),
+                highQ = obj.optDouble("highQ", d.highQ.toDouble()).toFloat().coerceIn(0.2f, 4f)
+            )
+        }
+    }
+}
 
 data class ReverbConfig(
     val enabled: Boolean = false,
+    val preset: ReverbPreset = ReverbPreset.STUDIO,
     val mixPercent: Int = 81,
     val roomSizePercent: Int = 50,
+    val decayTimeSec: Float = 1.6f,
     val dampingPercent: Int = 50,
     val wetPercent: Int = 30,
     val dryPercent: Int = 100,
     val widthPercent: Int = 100,
     val preDelayMs: Float = 0f
-)
+) {
+    fun toJson(): JSONObject = JSONObject().apply {
+        put("preset", preset.name)
+        put("mixPercent", mixPercent)
+        put("roomSizePercent", roomSizePercent)
+        put("decayTimeSec", decayTimeSec.toDouble())
+        put("dampingPercent", dampingPercent)
+        put("wetPercent", wetPercent)
+        put("dryPercent", dryPercent)
+        put("widthPercent", widthPercent)
+        put("preDelayMs", preDelayMs.toDouble())
+    }
 
+    companion object {
+        fun fromJson(obj: JSONObject, enabled: Boolean): ReverbConfig {
+            val d = ReverbConfig(enabled = enabled)
+            return d.copy(
+                preset = ReverbPreset.entries.firstOrNull { it.name == obj.optString("preset") } ?: d.preset,
+                mixPercent = obj.optInt("mixPercent", d.mixPercent).coerceIn(0, 100),
+                roomSizePercent = obj.optInt("roomSizePercent", d.roomSizePercent).coerceIn(0, 100),
+                decayTimeSec = obj.optDouble("decayTimeSec", d.decayTimeSec.toDouble()).toFloat().coerceIn(0.2f, 8.0f),
+                dampingPercent = obj.optInt("dampingPercent", d.dampingPercent).coerceIn(0, 100),
+                wetPercent = obj.optInt("wetPercent", d.wetPercent).coerceIn(0, 100),
+                dryPercent = obj.optInt("dryPercent", d.dryPercent).coerceIn(0, 100),
+                widthPercent = obj.optInt("widthPercent", d.widthPercent).coerceIn(0, 100),
+                preDelayMs = obj.optDouble("preDelayMs", d.preDelayMs.toDouble()).toFloat().coerceIn(0f, 100f)
+            )
+        }
+    }
+}
+
+/**
+ * Shared Delay / Echo configuration synchronized between Home Studio Controls ("Delay")
+ * and the Effects tab ("Echo").
+ */
 data class EchoConfig(
     val enabled: Boolean = false,
-    val mixPercent: Int = 40,
+    val mixPercent: Int = 60,
     val timeMs: Int = 250,
     val feedbackPercent: Int = 35,
     val echoLevelPercent: Int = 30,
+    val wetPercent: Int = 35,
+    val dryPercent: Int = 100,
     val pingPong: Boolean = false,
-    val lowCutHz: Float = 80f
-)
+    val widthPercent: Int = 60,
+    val tempoSync: Boolean = false,
+    val bpm: Int = 120,
+    val subdivision: DelaySubdivision = DelaySubdivision.EIGHTH,
+    val lowCutHz: Float = 80f,
+    val highCutHz: Float = 8000f
+) {
+    val effectiveDelayMs: Int
+        get() = if (tempoSync) {
+            val beatMs = 60_000f / bpm.coerceIn(60, 200)
+            (beatMs * subdivision.beatFactor).roundToInt().coerceIn(20, 1000)
+        } else {
+            timeMs.coerceIn(20, 1000)
+        }
+
+    fun toJson(): JSONObject = JSONObject().apply {
+        put("mixPercent", mixPercent)
+        put("timeMs", timeMs)
+        put("feedbackPercent", feedbackPercent)
+        put("echoLevelPercent", echoLevelPercent)
+        put("wetPercent", wetPercent)
+        put("dryPercent", dryPercent)
+        put("pingPong", pingPong)
+        put("widthPercent", widthPercent)
+        put("tempoSync", tempoSync)
+        put("bpm", bpm)
+        put("subdivision", subdivision.name)
+        put("lowCutHz", lowCutHz.toDouble())
+        put("highCutHz", highCutHz.toDouble())
+    }
+
+    companion object {
+        fun fromJson(obj: JSONObject, enabled: Boolean): EchoConfig {
+            val d = EchoConfig(enabled = enabled)
+            return d.copy(
+                mixPercent = obj.optInt("mixPercent", d.mixPercent).coerceIn(0, 100),
+                timeMs = obj.optInt("timeMs", d.timeMs).coerceIn(20, 1000),
+                feedbackPercent = obj.optInt("feedbackPercent", d.feedbackPercent).coerceIn(0, 90),
+                echoLevelPercent = obj.optInt("echoLevelPercent", d.echoLevelPercent).coerceIn(0, 100),
+                wetPercent = obj.optInt("wetPercent", d.wetPercent).coerceIn(0, 100),
+                dryPercent = obj.optInt("dryPercent", d.dryPercent).coerceIn(0, 100),
+                pingPong = obj.optBoolean("pingPong", d.pingPong),
+                widthPercent = obj.optInt("widthPercent", d.widthPercent).coerceIn(0, 100),
+                tempoSync = obj.optBoolean("tempoSync", d.tempoSync),
+                bpm = obj.optInt("bpm", d.bpm).coerceIn(60, 200),
+                subdivision = DelaySubdivision.entries.firstOrNull { it.name == obj.optString("subdivision") } ?: d.subdivision,
+                lowCutHz = obj.optDouble("lowCutHz", d.lowCutHz.toDouble()).toFloat().coerceIn(20f, 1000f),
+                highCutHz = obj.optDouble("highCutHz", d.highCutHz.toDouble()).toFloat().coerceIn(1000f, 18000f)
+            )
+        }
+    }
+}
 
 data class HallConfig(
     val enabled: Boolean = false,
@@ -72,43 +206,182 @@ data class HallConfig(
     val reverberationAmount: Int = 71
 )
 
+fun NoiseGateConfig.toJson(): JSONObject = JSONObject().apply {
+    put("mixPercent", mixPercent)
+    put("thresholdDb", thresholdDb.toDouble())
+    put("attackMs", attackMs.toDouble())
+    put("holdMs", holdMs.toDouble())
+    put("releaseMs", releaseMs.toDouble())
+    put("rangeDb", rangeDb.toDouble())
+}
+
+fun noiseGateFromJson(obj: JSONObject, enabled: Boolean): NoiseGateConfig {
+    val d = NoiseGateConfig(enabled = enabled)
+    return d.copy(
+        mixPercent = obj.optInt("mixPercent", d.mixPercent).coerceIn(0, 100),
+        thresholdDb = obj.optDouble("thresholdDb", d.thresholdDb.toDouble()).toFloat().coerceIn(-70f, -10f),
+        attackMs = obj.optDouble("attackMs", d.attackMs.toDouble()).toFloat().coerceIn(0.5f, 50f),
+        holdMs = obj.optDouble("holdMs", d.holdMs.toDouble()).toFloat().coerceIn(0f, 500f),
+        releaseMs = obj.optDouble("releaseMs", d.releaseMs.toDouble()).toFloat().coerceIn(20f, 600f),
+        rangeDb = obj.optDouble("rangeDb", d.rangeDb.toDouble()).toFloat().coerceIn(0f, 80f)
+    )
+}
+
+/**
+ * Single unified Effects Rack & 10-Effect Studio Controls state shared across:
+ *  - Live Microphone Recording
+ *  - Live Voice Preview
+ *  - Imported Audio Real-Time Playback
+ *  - Processed Audio WAV Export
+ *  - Home Screen "AUDIO EFFECTS & STUDIO CONTROLS" & Effects Tab
+ */
 data class EffectsRackConfig(
-    val noiseGate: NoiseGateConfig = NoiseGateConfig(),
-    val lowPass: LowPassConfig = LowPassConfig(),
-    val highPass: HighPassConfig = HighPassConfig(),
+    val pitchCorrection: PitchCorrectionConfig = PitchCorrectionConfig(),
+    val pitchFormant: PitchFormantConfig = PitchFormantConfig(),
     val equalizer: EqualizerConfig = EqualizerConfig(),
+    val compression: CompressionConfig = CompressionConfig(),
+    val saturation: SaturationConfig = SaturationConfig(),
     val reverb: ReverbConfig = ReverbConfig(),
     val echo: EchoConfig = EchoConfig(),
+    val noiseGate: NoiseGateConfig = NoiseGateConfig(),
+    val deEsser: DeEsserConfig = DeEsserConfig(),
+    val limiter: LimiterConfig = LimiterConfig(),
+    val lowPass: LowPassConfig = LowPassConfig(),
+    val highPass: HighPassConfig = HighPassConfig(),
     val hall: HallConfig = HallConfig()
 ) {
-    val activeEffectCount: Int
+    val activeStudioEffectCount: Int
         get() = listOf(
-            noiseGate.enabled,
-            lowPass.enabled,
-            highPass.enabled,
+            pitchCorrection.enabled,
+            pitchFormant.enabled,
             equalizer.enabled,
+            compression.enabled,
+            saturation.enabled,
             reverb.enabled,
             echo.enabled,
+            noiseGate.enabled,
+            deEsser.enabled,
+            limiter.enabled
+        ).count { it }
+
+    val activeEffectCount: Int
+        get() = activeStudioEffectCount + listOf(
+            lowPass.enabled,
+            highPass.enabled,
             hall.enabled
         ).count { it }
 }
 
 /**
- * Zero-allocation real-time Effects Rack operating at 48,000 Hz.
- * Runs Noise Gate, Low-pass, High-pass, 5-Band Equalizer, Echo, Reverb, and Hall.
- * Note: Noise Gate runs before Voice Changer so noise is gated prior to pitch tracking;
- * post-effects (Low-pass, High-pass, Equalizer, Echo, Reverb, Hall) run after Voice Changer.
+ * Complete unified Studio DSP Processing Chain operating at 48,000 Hz mono.
+ * Instantiate independently per audio stream (Live Engine, Imported Player, Offline Exporter)
+ * while feeding identical [EffectsRackConfig] and [VoiceChangerConfig] values.
  */
-class EffectsRackProcessor(
+class StudioDspPipeline(
     private val sampleRateHz: Int = AudioConfig.OUTPUT_SAMPLE_RATE_HZ
 ) {
     val noiseGate = NoiseGateProcessor(sampleRateHz)
-    private val lowPass = LowPassEffect(sampleRateHz)
+    val pitchCorrection = PitchCorrectionProcessor(sampleRateHz)
+    val voiceChanger = VoiceChangerDsp(sampleRateHz)
+    val pitchFormant = PitchFormantProcessor(sampleRateHz)
     private val highPass = HighPassEffect(sampleRateHz)
+    private val lowPass = LowPassEffect(sampleRateHz)
     private val equalizer = EqualizerEffect(sampleRateHz)
+    private val deEsser = DeEsserProcessor(sampleRateHz)
+    val compression = CompressionProcessor(sampleRateHz)
+    private val saturation = SaturationProcessor(sampleRateHz)
     private val echo = EchoEffect(sampleRateHz)
     private val reverb = ReverbEffect(sampleRateHz)
     private val hall = HallEffect(sampleRateHz)
+    private val limiter = LimiterProcessor(sampleRateHz)
+
+    @Volatile
+    private var effectsConfig = EffectsRackConfig()
+
+    @Volatile
+    private var voiceChangerConfig = VoiceChangerConfig()
+
+    fun updateEffectsConfig(newConfig: EffectsRackConfig) {
+        effectsConfig = newConfig
+        noiseGate.updateConfig(newConfig.noiseGate)
+        pitchCorrection.updateConfig(newConfig.pitchCorrection)
+        pitchFormant.updateConfig(newConfig.pitchFormant)
+        highPass.updateConfig(newConfig.highPass)
+        lowPass.updateConfig(newConfig.lowPass)
+        equalizer.updateConfig(newConfig.equalizer)
+        deEsser.updateConfig(newConfig.deEsser)
+        compression.updateConfig(newConfig.compression)
+        saturation.updateConfig(newConfig.saturation)
+        echo.updateConfig(newConfig.echo)
+        reverb.updateConfig(newConfig.reverb)
+        hall.updateConfig(newConfig.hall)
+        limiter.updateConfig(newConfig.limiter)
+    }
+
+    fun updateVoiceChangerConfig(newConfig: VoiceChangerConfig) {
+        voiceChangerConfig = newConfig
+        voiceChanger.updateConfig(newConfig)
+    }
+
+    fun getEffectsConfig(): EffectsRackConfig = effectsConfig
+
+    fun getVoiceChangerConfig(): VoiceChangerConfig = voiceChangerConfig
+
+    fun reset() {
+        noiseGate.reset()
+        pitchCorrection.reset()
+        voiceChanger.reset()
+        pitchFormant.reset()
+        highPass.reset()
+        lowPass.reset()
+        equalizer.reset()
+        deEsser.reset()
+        compression.reset()
+        saturation.reset()
+        echo.reset()
+        reverb.reset()
+        hall.reset()
+        limiter.reset()
+    }
+
+    fun processInPlace(buffer: FloatArray, count: Int) {
+        if (count <= 0) return
+        noiseGate.processInPlace(buffer, count)
+        pitchCorrection.processInPlace(buffer, count)
+        voiceChanger.processInPlace(buffer, count)
+        pitchFormant.processInPlace(buffer, count)
+        highPass.processInPlace(buffer, count)
+        lowPass.processInPlace(buffer, count)
+        equalizer.processInPlace(buffer, count)
+        deEsser.processInPlace(buffer, count)
+        compression.processInPlace(buffer, count)
+        saturation.processInPlace(buffer, count)
+        echo.processInPlace(buffer, count)
+        reverb.processInPlace(buffer, count)
+        hall.processInPlace(buffer, count)
+        limiter.processInPlace(buffer, count)
+    }
+}
+
+/**
+ * Legacy-compatible facade delegating into the modular processors.
+ */
+class EffectsRackProcessor(
+    sampleRateHz: Int = AudioConfig.OUTPUT_SAMPLE_RATE_HZ
+) {
+    val noiseGate = NoiseGateProcessor(sampleRateHz)
+    private val pitchCorrection = PitchCorrectionProcessor(sampleRateHz)
+    private val pitchFormant = PitchFormantProcessor(sampleRateHz)
+    private val lowPass = LowPassEffect(sampleRateHz)
+    private val highPass = HighPassEffect(sampleRateHz)
+    private val equalizer = EqualizerEffect(sampleRateHz)
+    private val deEsser = DeEsserProcessor(sampleRateHz)
+    private val compression = CompressionProcessor(sampleRateHz)
+    private val saturation = SaturationProcessor(sampleRateHz)
+    private val echo = EchoEffect(sampleRateHz)
+    private val reverb = ReverbEffect(sampleRateHz)
+    private val hall = HallEffect(sampleRateHz)
+    private val limiter = LimiterProcessor(sampleRateHz)
 
     @Volatile
     private var config = EffectsRackConfig()
@@ -116,38 +389,56 @@ class EffectsRackProcessor(
     fun updateConfig(newConfig: EffectsRackConfig) {
         config = newConfig
         noiseGate.updateConfig(newConfig.noiseGate)
+        pitchCorrection.updateConfig(newConfig.pitchCorrection)
+        pitchFormant.updateConfig(newConfig.pitchFormant)
         lowPass.updateConfig(newConfig.lowPass)
         highPass.updateConfig(newConfig.highPass)
         equalizer.updateConfig(newConfig.equalizer)
+        deEsser.updateConfig(newConfig.deEsser)
+        compression.updateConfig(newConfig.compression)
+        saturation.updateConfig(newConfig.saturation)
         echo.updateConfig(newConfig.echo)
         reverb.updateConfig(newConfig.reverb)
         hall.updateConfig(newConfig.hall)
+        limiter.updateConfig(newConfig.limiter)
     }
 
     fun getConfig(): EffectsRackConfig = config
 
     fun reset() {
         noiseGate.reset()
+        pitchCorrection.reset()
+        pitchFormant.reset()
         lowPass.reset()
         highPass.reset()
         equalizer.reset()
+        deEsser.reset()
+        compression.reset()
+        saturation.reset()
         echo.reset()
         reverb.reset()
         hall.reset()
+        limiter.reset()
     }
 
     fun processPreVoiceChanger(buffer: FloatArray, count: Int) {
         noiseGate.processInPlace(buffer, count)
+        pitchCorrection.processInPlace(buffer, count)
     }
 
     fun processPostVoiceChanger(buffer: FloatArray, count: Int) {
         if (count <= 0) return
+        pitchFormant.processInPlace(buffer, count)
         highPass.processInPlace(buffer, count)
         lowPass.processInPlace(buffer, count)
         equalizer.processInPlace(buffer, count)
+        deEsser.processInPlace(buffer, count)
+        compression.processInPlace(buffer, count)
+        saturation.processInPlace(buffer, count)
         echo.processInPlace(buffer, count)
         reverb.processInPlace(buffer, count)
         hall.processInPlace(buffer, count)
+        limiter.processInPlace(buffer, count)
     }
 }
 
@@ -275,6 +566,7 @@ internal class EqualizerEffect(private val sampleRateHz: Int) {
             mixPercent = cfg.mixPercent.coerceIn(0, 100),
             lowFreqHz = cfg.lowFreqHz.coerceIn(20f, 500f),
             lowGainDb = cfg.lowGainDb.coerceIn(-12f, 12f),
+            lowQ = cfg.lowQ.coerceIn(0.2f, 4f),
             mid1FreqHz = cfg.mid1FreqHz.coerceIn(100f, 1500f),
             mid1GainDb = cfg.mid1GainDb.coerceIn(-12f, 12f),
             mid1Q = cfg.mid1Q.coerceIn(0.1f, 10f),
@@ -285,7 +577,8 @@ internal class EqualizerEffect(private val sampleRateHz: Int) {
             mid3GainDb = cfg.mid3GainDb.coerceIn(-12f, 12f),
             mid3Q = cfg.mid3Q.coerceIn(0.1f, 10f),
             highFreqHz = cfg.highFreqHz.coerceIn(2000f, 16000f),
-            highGainDb = cfg.highGainDb.coerceIn(-12f, 12f)
+            highGainDb = cfg.highGainDb.coerceIn(-12f, 12f),
+            highQ = cfg.highQ.coerceIn(0.2f, 4f)
         )
     }
 
@@ -307,11 +600,11 @@ internal class EqualizerEffect(private val sampleRateHz: Int) {
         }
         if (cfg != lastApplied) {
             lastApplied = cfg
-            lowBand.setLowShelf(sampleRateHz, cfg.lowFreqHz.toDouble(), cfg.lowGainDb.toDouble())
+            lowBand.setLowShelf(sampleRateHz, cfg.lowFreqHz.toDouble(), cfg.lowGainDb.toDouble(), cfg.lowQ.toDouble())
             mid1Band.setPeaking(sampleRateHz, cfg.mid1FreqHz.toDouble(), cfg.mid1Q.toDouble(), cfg.mid1GainDb.toDouble())
             mid2Band.setPeaking(sampleRateHz, cfg.mid2FreqHz.toDouble(), cfg.mid2Q.toDouble(), cfg.mid2GainDb.toDouble())
             mid3Band.setPeaking(sampleRateHz, cfg.mid3FreqHz.toDouble(), cfg.mid3Q.toDouble(), cfg.mid3GainDb.toDouble())
-            highBand.setHighShelf(sampleRateHz, cfg.highFreqHz.toDouble(), cfg.highGainDb.toDouble())
+            highBand.setHighShelf(sampleRateHz, cfg.highFreqHz.toDouble(), cfg.highGainDb.toDouble(), cfg.highQ.toDouble())
         }
         val targetActive = if (cfg.enabled) 1f else 0f
         val mix = cfg.mixPercent / 100f
@@ -327,6 +620,30 @@ internal class EqualizerEffect(private val sampleRateHz: Int) {
             val effMix = mix * smoothActive
             val out = dry * (1f - effMix) + wet * effMix
             buffer[i] = softClip(out)
+        }
+    }
+
+    companion object {
+        fun computeMagnitudeCurveDb(
+            cfg: EqualizerConfig,
+            frequenciesHz: FloatArray,
+            sampleRateHz: Int = AudioConfig.OUTPUT_SAMPLE_RATE_HZ
+        ): FloatArray {
+            val f1 = BiquadFilter().apply { setLowShelf(sampleRateHz, cfg.lowFreqHz.toDouble(), cfg.lowGainDb.toDouble(), cfg.lowQ.toDouble()) }
+            val f2 = BiquadFilter().apply { setPeaking(sampleRateHz, cfg.mid1FreqHz.toDouble(), cfg.mid1Q.toDouble(), cfg.mid1GainDb.toDouble()) }
+            val f3 = BiquadFilter().apply { setPeaking(sampleRateHz, cfg.mid2FreqHz.toDouble(), cfg.mid2Q.toDouble(), cfg.mid2GainDb.toDouble()) }
+            val f4 = BiquadFilter().apply { setPeaking(sampleRateHz, cfg.mid3FreqHz.toDouble(), cfg.mid3Q.toDouble(), cfg.mid3GainDb.toDouble()) }
+            val f5 = BiquadFilter().apply { setHighShelf(sampleRateHz, cfg.highFreqHz.toDouble(), cfg.highGainDb.toDouble(), cfg.highQ.toDouble()) }
+            val mixScale = cfg.mixPercent / 100f
+            return FloatArray(frequenciesHz.size) { idx ->
+                val f = frequenciesHz[idx].toDouble()
+                val sumDb = f1.magnitudeDbAt(sampleRateHz, f) +
+                    f2.magnitudeDbAt(sampleRateHz, f) +
+                    f3.magnitudeDbAt(sampleRateHz, f) +
+                    f4.magnitudeDbAt(sampleRateHz, f) +
+                    f5.magnitudeDbAt(sampleRateHz, f)
+                (sumDb.toFloat() * mixScale).coerceIn(-15f, 15f)
+            }
         }
     }
 }
@@ -345,9 +662,10 @@ internal class EchoEffect(private val sampleRateHz: Int) {
     private var smoothActive = 0f
 
     private val lowCutFilter = BiquadFilter()
+    private val highCutFilter = BiquadFilter()
     private val pingPongAltFilter = BiquadFilter()
     private var lastLowCut = -1f
-    private var tapCounter = 0
+    private var lastHighCut = -1f
 
     init {
         pingPongAltFilter.setLowPass(sampleRateHz, 3400.0, 0.707)
@@ -359,18 +677,24 @@ internal class EchoEffect(private val sampleRateHz: Int) {
             timeMs = cfg.timeMs.coerceIn(20, 1000),
             feedbackPercent = cfg.feedbackPercent.coerceIn(0, 90),
             echoLevelPercent = cfg.echoLevelPercent.coerceIn(0, 100),
-            lowCutHz = cfg.lowCutHz.coerceIn(20f, 1000f)
+            wetPercent = cfg.wetPercent.coerceIn(0, 100),
+            dryPercent = cfg.dryPercent.coerceIn(0, 100),
+            widthPercent = cfg.widthPercent.coerceIn(0, 100),
+            bpm = cfg.bpm.coerceIn(60, 200),
+            lowCutHz = cfg.lowCutHz.coerceIn(20f, 1000f),
+            highCutHz = cfg.highCutHz.coerceIn(1000f, 18000f)
         )
     }
 
     fun reset() {
         delayRing.fill(0f)
         writePos = 0
-        currentDelaySamples = (config.timeMs * sampleRateHz) / 1000f
+        currentDelaySamples = (config.effectiveDelayMs * sampleRateHz) / 1000f
         lowCutFilter.reset()
+        highCutFilter.reset()
         pingPongAltFilter.reset()
         lastLowCut = -1f
-        tapCounter = 0
+        lastHighCut = -1f
         smoothActive = if (config.enabled) 1f else 0f
     }
 
@@ -384,12 +708,18 @@ internal class EchoEffect(private val sampleRateHz: Int) {
             lastLowCut = cfg.lowCutHz
             lowCutFilter.setHighPass(sampleRateHz, cfg.lowCutHz.toDouble(), 0.707)
         }
+        if (abs(cfg.highCutHz - lastHighCut) > 25f) {
+            lastHighCut = cfg.highCutHz
+            highCutFilter.setLowPass(sampleRateHz, cfg.highCutHz.toDouble(), 0.707)
+        }
 
         val targetActive = if (cfg.enabled) 1f else 0f
-        val targetDelaySamples = ((cfg.timeMs * sampleRateHz) / 1000f)
+        val targetDelaySamples = ((cfg.effectiveDelayMs * sampleRateHz) / 1000f)
             .coerceIn(24f, (maxSamples - 4).toFloat())
         val feedback = (cfg.feedbackPercent / 100f).coerceIn(0f, 0.90f)
-        val echoGain = cfg.echoLevelPercent / 100f
+        val wetGain = ((cfg.wetPercent / 100f) * 0.7f + (cfg.echoLevelPercent / 100f) * 0.3f)
+        val dryGain = cfg.dryPercent / 100f
+        val widthNorm = cfg.widthPercent / 100f
         val mix = cfg.mixPercent / 100f
 
         for (i in 0 until count) {
@@ -404,26 +734,26 @@ internal class EchoEffect(private val sampleRateHz: Int) {
             val frac = readPos - floor(readPos)
             val delayed = delayRing[idx0] * (1f - frac) + delayRing[idx1] * frac
 
-            // Optional Ping-Pong stereo-feel alternating tap modulation in mono
-            val tapProcessed = if (cfg.pingPong) {
+            val tapProcessed = if (cfg.pingPong || widthNorm > 0.1f) {
                 val secondaryPos = (writePos - (currentDelaySamples * 0.5f).toInt() + maxSamples) % maxSamples
-                val softBounce = pingPongAltFilter.process(delayRing[secondaryPos]) * 0.45f
-                delayed * 0.75f + softBounce
+                val softBounce = pingPongAltFilter.process(delayRing[secondaryPos]) * (0.45f * widthNorm)
+                val primaryWeight = if (cfg.pingPong) 0.75f else 1.0f - 0.15f * widthNorm
+                delayed * primaryWeight + softBounce
             } else {
                 delayed
             }
 
-            val fbSignal = lowCutFilter.process(delayed * feedback)
+            val fbSignal = highCutFilter.process(lowCutFilter.process(delayed * feedback))
             delayRing[writePos] = if (cfg.enabled) {
                 softClip(dry + fbSignal)
             } else {
-                fbSignal * 0.95f // smoothly decay tail on disable
+                fbSignal * 0.95f
             }
 
             writePos++
             if (writePos >= maxSamples) writePos = 0
 
-            val wet = dry + tapProcessed * echoGain
+            val wet = dry * dryGain + tapProcessed * wetGain
             val effMix = mix * smoothActive
             buffer[i] = softClip(dry * (1f - effMix) + wet * effMix)
         }
@@ -437,12 +767,11 @@ internal class ReverbEffect(private val sampleRateHz: Int) {
     @Volatile
     private var config = ReverbConfig()
 
-    // Scale classic 44.1 kHz Freeverb comb/allpass lengths to 48 kHz
     private val combTunings = intArrayOf(1214, 1293, 1390, 1478, 1546, 1622, 1694, 1765)
     private val allpassTunings = intArrayOf(605, 480, 371, 245)
 
     private val combs = Array(combTunings.size) { CombFilter(combTunings[it]) }
-    private val combRight = Array(4) { CombFilter(combTunings[it] + 25) } // width Haas taps
+    private val combRight = Array(4) { CombFilter(combTunings[it] + 25) }
     private val allpasses = Array(allpassTunings.size) { AllpassFilter(allpassTunings[it]) }
 
     private val maxPreDelaySamples = (sampleRateHz * 110) / 1000
@@ -454,6 +783,7 @@ internal class ReverbEffect(private val sampleRateHz: Int) {
         config = cfg.copy(
             mixPercent = cfg.mixPercent.coerceIn(0, 100),
             roomSizePercent = cfg.roomSizePercent.coerceIn(0, 100),
+            decayTimeSec = cfg.decayTimeSec.coerceIn(0.2f, 8.0f),
             dampingPercent = cfg.dampingPercent.coerceIn(0, 100),
             wetPercent = cfg.wetPercent.coerceIn(0, 100),
             dryPercent = cfg.dryPercent.coerceIn(0, 100),
@@ -479,7 +809,9 @@ internal class ReverbEffect(private val sampleRateHz: Int) {
         }
 
         val targetActive = if (cfg.enabled) 1f else 0f
-        val feedback = 0.68f + (cfg.roomSizePercent / 100f) * 0.28f
+        val sizeNorm = cfg.roomSizePercent / 100f
+        val decayNorm = ((cfg.decayTimeSec - 0.2f) / 7.8f).coerceIn(0f, 1f)
+        val feedback = (0.62f + sizeNorm * 0.16f + decayNorm * 0.19f).coerceIn(0.60f, 0.965f)
         val damp = (cfg.dampingPercent / 100f) * 0.45f
         val wetGain = (cfg.wetPercent / 100f) * 0.35f
         val dryGain = cfg.dryPercent / 100f
@@ -521,9 +853,6 @@ internal class ReverbEffect(private val sampleRateHz: Int) {
     }
 }
 
-/**
- * Hall spatial processor with independent Echo and Reverberation parameters (0 - 100).
- */
 internal class HallEffect(private val sampleRateHz: Int) {
     @Volatile
     private var config = HallConfig()
@@ -534,7 +863,6 @@ internal class HallEffect(private val sampleRateHz: Int) {
     private val allpasses = Array(hallAllpassTunings.size) { AllpassFilter(hallAllpassTunings[it]) }
     private val warmthLpf = BiquadFilter()
 
-    // Dedicated early hall echo tap (~145 ms & ~240 ms)
     private val echoRingSize = (sampleRateHz * 320) / 1000
     private val echoRing = FloatArray(echoRingSize)
     private var echoWrite = 0
