@@ -1,0 +1,6 @@
+{
+  "name": "VoxForge",
+  "description": "Professional native Android voiceover recorder with real-time DSP voice changer, live monitoring delay control, noise gate, and USB-C microphone support.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,32 @@
+<resources>
+    <string name="app_name">VoxForge</string>
+    <string name="tab_recorder">Recorder</string>
+    <string name="tab_voice_changer">Voice Changer</string>
+    <string name="tab_noise_gate">Noise Gate</string>
+
+    <string name="notification_channel_name">VoxForge Audio Engine</string>
+    <string name="notification_channel_desc">Keeps voiceover recording and live monitoring active in the background and when screen is off</string>
+    <string name="notification_title_recording">Recording Voiceover</string>
+    <string name="notification_title_paused">Recording Paused</string>
+    <string name="notification_title_monitoring">Live Voice Preview Active</string>
+    <string name="notification_action_pause">Pause</string>
+    <string name="notification_action_resume">Resume</string>
+    <string name="notification_action_stop">Stop</string>
+
+    <string name="mic_permission_title">Microphone Permission Required</string>
+    <string name="mic_permission_body">VoxForge needs microphone access to capture live audio from your USB-C or device microphone for real-time voice processing and WAV recording.</string>
+    <string name="mic_permission_grant">Grant Microphone Access</string>
+    <string name="mic_permission_settings">Open App Settings</string>
+
+    <string name="cd_start_recording">Start Recording</string>
+    <string name="cd_stop_recording">Stop Recording</string>
+    <string name="cd_pause_recording">Pause Recording</string>
+    <string name="cd_resume_recording">Resume Recording</string>
+    <string name="cd_decrease_param">Decrease parameter</string>
+    <string name="cd_increase_param">Increase parameter</string>
+    <string name="cd_play_recording">Play recording</string>
+    <string name="cd_pause_playback">Pause playback</string>
+    <string name="cd_share_recording">Share WAV recording</string>
+    <string name="cd_rename_recording">Rename recording</string>
+    <string name="cd_delete_recording">Delete recording</string>
+</resources>
