@@ -68,7 +68,7 @@ import com.example.audio.RecordingStatus
 import com.example.data.RecordingItem
 import com.example.ui.StudioTab
 import com.example.ui.VoxForgeViewModel
-import com.example.ui.screens.NoiseGateScreen
+import com.example.ui.screens.EffectsScreen
 import com.example.ui.screens.RecorderScreen
 import com.example.ui.screens.VoiceChangerScreen
 import com.example.ui.theme.CyanContainer
@@ -112,7 +112,7 @@ fun VoxForgeApp(
     val metrics by viewModel.liveMetrics.collectAsStateWithLifecycle()
     val voiceChangerConfig by viewModel.voiceChangerConfig.collectAsStateWithLifecycle()
     val monitoringConfig by viewModel.monitoringConfig.collectAsStateWithLifecycle()
-    val noiseGateConfig by viewModel.noiseGateConfig.collectAsStateWithLifecycle()
+    val effectsConfig by viewModel.effectsConfig.collectAsStateWithLifecycle()
     val recordings by viewModel.recordings.collectAsStateWithLifecycle()
     val playbackState by viewModel.playbackState.collectAsStateWithLifecycle()
     val statusBanner by viewModel.statusBanner.collectAsStateWithLifecycle()
@@ -151,17 +151,30 @@ fun VoxForgeApp(
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                val granted = ContextCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.RECORD_AUDIO
-                ) == PackageManager.PERMISSION_GRANTED
-                viewModel.setPermissionGranted(granted)
-                viewModel.refreshDevices()
+            when (event) {
+                Lifecycle.Event.ON_START -> {
+                    viewModel.setAppForeground(true)
+                }
+                Lifecycle.Event.ON_RESUME -> {
+                    val granted = ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.RECORD_AUDIO
+                    ) == PackageManager.PERMISSION_GRANTED
+                    viewModel.setPermissionGranted(granted)
+                    viewModel.refreshDevices()
+                    viewModel.setAppForeground(true)
+                }
+                Lifecycle.Event.ON_STOP -> {
+                    viewModel.setAppForeground(false)
+                }
+                else -> {}
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            viewModel.setAppForeground(false)
+        }
     }
 
     val openAppSettings = {
@@ -331,7 +344,7 @@ fun VoxForgeApp(
                             recordingStatus = recordingStatus,
                             metrics = metrics,
                             voiceChangerConfig = voiceChangerConfig,
-                            noiseGateConfig = noiseGateConfig,
+                            effectsConfig = effectsConfig,
                             monitoringConfig = monitoringConfig,
                             recordings = recordings,
                             playbackState = playbackState,
@@ -355,14 +368,12 @@ fun VoxForgeApp(
                             monitoringConfig = monitoringConfig,
                             hardwareState = hardwareState,
                             metrics = metrics,
+                            onEnabledChanged = viewModel::setVoiceChangerEnabled,
                             onSelectPreset = viewModel::selectVoicePreset,
                             onResetPreset = viewModel::resetVoicePresetToDefault,
-                            onBypassChanged = viewModel::setVoiceChangerBypass,
-                            onPitchChanged = viewModel::updatePitch,
-                            onFormantChanged = viewModel::updateFormant,
-                            onFineTuneChanged = viewModel::updateFineTune,
-                            onTimbreChanged = viewModel::updateTimbre,
-                            onDryWetChanged = viewModel::updateDryWet,
+                            onPitchLevelChanged = viewModel::updateVoicePitchLevel,
+                            onToneLevelChanged = viewModel::updateVoiceToneLevel,
+                            onClarityChanged = viewModel::updateVoiceClarity,
                             onLivePreviewToggle = viewModel::setLiveVoicePreviewEnabled,
                             onMonitoringDelayChanged = viewModel::updateMonitoringDelaySlider,
                             onResetMonitoringDelay = viewModel::resetMonitoringDelayToDefault,
@@ -370,14 +381,15 @@ fun VoxForgeApp(
                             onEchoCancellationToggle = viewModel::setEchoCancellationEnabled
                         )
 
-                        StudioTab.NOISE_GATE -> NoiseGateScreen(
-                            config = noiseGateConfig,
-                            metrics = metrics,
-                            onEnabledChanged = viewModel::setNoiseGateEnabled,
-                            onThresholdChanged = viewModel::updateGateThreshold,
-                            onAttackChanged = viewModel::updateGateAttack,
-                            onReleaseChanged = viewModel::updateGateRelease,
-                            onResetDefaults = viewModel::resetNoiseGateToDefault
+                        StudioTab.EFFECTS -> EffectsScreen(
+                            config = effectsConfig,
+                            onNoiseGateChanged = viewModel::updateNoiseGateConfig,
+                            onLowPassChanged = viewModel::updateLowPassConfig,
+                            onHighPassChanged = viewModel::updateHighPassConfig,
+                            onEqualizerChanged = viewModel::updateEqualizerConfig,
+                            onReverbChanged = viewModel::updateReverbConfig,
+                            onEchoChanged = viewModel::updateEchoConfig,
+                            onHallChanged = viewModel::updateHallConfig
                         )
                     }
                 }
@@ -391,7 +403,7 @@ private fun TabIcon(tab: StudioTab, selected: Boolean) {
     val icon = when (tab) {
         StudioTab.RECORDER -> if (selected) Icons.Filled.Mic else Icons.Outlined.Mic
         StudioTab.VOICE_CHANGER -> if (selected) Icons.Filled.Tune else Icons.Outlined.Tune
-        StudioTab.NOISE_GATE -> if (selected) Icons.Filled.GraphicEq else Icons.Outlined.GraphicEq
+        StudioTab.EFFECTS -> if (selected) Icons.Filled.GraphicEq else Icons.Outlined.GraphicEq
     }
     Icon(imageVector = icon, contentDescription = tabLabel(tab))
 }
@@ -400,5 +412,5 @@ private fun TabIcon(tab: StudioTab, selected: Boolean) {
 private fun tabLabel(tab: StudioTab): String = when (tab) {
     StudioTab.RECORDER -> stringResource(R.string.tab_recorder)
     StudioTab.VOICE_CHANGER -> stringResource(R.string.tab_voice_changer)
-    StudioTab.NOISE_GATE -> stringResource(R.string.tab_noise_gate)
+    StudioTab.EFFECTS -> stringResource(R.string.tab_effects)
 }

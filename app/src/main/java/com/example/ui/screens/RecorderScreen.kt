@@ -66,7 +66,7 @@ import com.example.audio.MonitoringConfig
 import com.example.audio.PlaybackUiState
 import com.example.audio.RecordingStatus
 import com.example.data.RecordingItem
-import com.example.dsp.NoiseGateConfig
+import com.example.dsp.EffectsRackConfig
 import com.example.dsp.VoiceChangerConfig
 import com.example.ui.components.HardwareStatusCard
 import com.example.ui.components.StudioLevelMeterCard
@@ -95,7 +95,7 @@ fun RecorderScreen(
     recordingStatus: RecordingStatus,
     metrics: LiveAudioMetrics,
     voiceChangerConfig: VoiceChangerConfig,
-    noiseGateConfig: NoiseGateConfig,
+    effectsConfig: EffectsRackConfig,
     monitoringConfig: MonitoringConfig,
     recordings: List<RecordingItem>,
     playbackState: PlaybackUiState,
@@ -150,7 +150,7 @@ fun RecorderScreen(
                     recordingStatus = recordingStatus,
                     durationMs = metrics.recordingDurationMs,
                     voiceChangerConfig = voiceChangerConfig,
-                    noiseGateConfig = noiseGateConfig,
+                    effectsConfig = effectsConfig,
                     monitoringConfig = monitoringConfig,
                     onStartRecording = onStartRecording,
                     onPauseRecording = onPauseRecording,
@@ -314,7 +314,7 @@ private fun TransportConsoleCard(
     recordingStatus: RecordingStatus,
     durationMs: Long,
     voiceChangerConfig: VoiceChangerConfig,
-    noiseGateConfig: NoiseGateConfig,
+    effectsConfig: EffectsRackConfig,
     monitoringConfig: MonitoringConfig,
     onStartRecording: () -> Unit,
     onPauseRecording: () -> Unit,
@@ -417,19 +417,20 @@ private fun TransportConsoleCard(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
             ) {
-                val voiceLabel = if (voiceChangerConfig.bypass) {
-                    "Voice: Bypass"
+                val voiceLabel = if (!voiceChangerConfig.enabled) {
+                    "Voice: OFF"
                 } else {
                     "Voice: ${voiceChangerConfig.preset.displayName}"
                 }
                 PipelinePill(
                     text = voiceLabel,
-                    active = !voiceChangerConfig.bypass,
+                    active = voiceChangerConfig.enabled,
                     activeColor = CyanSignal
                 )
+                val activeFxCount = effectsConfig.activeEffectCount
                 PipelinePill(
-                    text = if (noiseGateConfig.enabled) "Gate: ON" else "Gate: OFF",
-                    active = noiseGateConfig.enabled,
+                    text = if (activeFxCount > 0) "FX: $activeFxCount ON" else "FX: OFF",
+                    active = activeFxCount > 0,
                     activeColor = EmeraldSafe
                 )
                 PipelinePill(
@@ -584,7 +585,7 @@ private fun EmptyRecordingsCard() {
                 color = MaterialTheme.colorScheme.onSurface
             )
             Text(
-                text = "Configure your Noise Gate and Voice Changer tabs, connect headphones for Live Voice Preview, and press Start Recording.",
+                text = "Configure your Effects and Voice Changer tabs, connect headphones for Live Voice Preview, and press Start Recording.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = TextSecondary
             )

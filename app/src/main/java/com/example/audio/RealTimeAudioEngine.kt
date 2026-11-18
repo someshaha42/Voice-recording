@@ -16,9 +16,9 @@ import android.media.audiofx.AcousticEchoCanceler
 import android.os.Build
 import android.os.Process
 import androidx.core.content.ContextCompat
+import com.example.dsp.EffectsRackConfig
+import com.example.dsp.EffectsRackProcessor
 import com.example.dsp.HighPassFilter
-import com.example.dsp.NoiseGateConfig
-import com.example.dsp.NoiseGateProcessor
 import com.example.dsp.PacketLossConcealment
 import com.example.dsp.VoiceChangerConfig
 import com.example.dsp.VoiceChangerDsp
@@ -34,19 +34,15 @@ import kotlin.math.sqrt
 import kotlin.math.tanh
 
 /**
- * Single shared real-time audio engine serving BOTH:
+ * Single shared real-time audio engine serving:
+ *  - Continuous Home Screen raw microphone input level metering (when app is in foreground)
  *  - Live Voice Preview / Direct Monitoring (Branch A, with adjustable MonitoringDelayLine & 0-500% Volume)
  *  - 48 kHz / 16-bit / Mono WAV Recording (Branch B, zero monitoring delay)
  *
  * Pipeline:
- *   Microphone Capture (USB-C FIFINE AM8 or Built-in) + Hardware AEC (when enabled)
- *   -> Resample to 48 kHz (pass-through when capture is already 48 kHz)
- *   -> 120 Hz 4th-order Butterworth High-Pass Filter (removes proximity boom & rumble)
- *   -> Packet Loss Concealment (PLC for wireless / jitter drops)
- *   -> Noise Gate Processor (if enabled)
- *   -> Voice Changer DSP (if not bypassed)
- *   -> Processed Audio Signal
- *       ├── Branch A (if Live Voice Preview ON): MonitoringDelayLine -> Volume Gain (0-500%) & Limiter -> Low-Latency AudioTrack
+ *   Microphone Capture -> Resample to 48 kHz -> Raw Input Level Metering (always real mic level)
+ *   -> 120 Hz High-Pass Filter -> PLC -> Noise Gate -> Voice Changer DSP -> Effects Rack
+ *       ├── Branch A (if Live Voice Preview ON): MonitoringDelayLine -> Volume Gain (0-500%) -> AudioTrack
  *       └── Branch B (if Recording ACTIVE): WavPcmWriter (48 kHz, 16-bit, Mono)
  */
 class RealTimeAudioEngine(
@@ -59,7 +55,7 @@ class RealTimeAudioEngine(
 
     private val highPassFilter = HighPassFilter(120.0, AudioConfig.OUTPUT_SAMPLE_RATE_HZ)
     private val packetLossConcealment = PacketLossConcealment(AudioConfig.OUTPUT_SAMPLE_RATE_HZ)
-    private val noiseGate = NoiseGateProcessor(AudioConfig.OUTPUT_SAMPLE_RATE_HZ)
+    private val effectsRack = EffectsRackProcessor(AudioConfig.OUTPUT_SAMPLE_RATE_HZ)
     private val voiceChanger = VoiceChangerDsp(AudioConfig.OUTPUT_SAMPLE_RATE_HZ)
     private val monitoringDelayLine = MonitoringDelayLine(AudioConfig.OUTPUT_SAMPLE_RATE_HZ)
 
@@ -107,6 +103,9 @@ class RealTimeAudioEngine(
     @Volatile
     private var smoothedMonitorGain = 1.0f
 
+    @Volatile
+    private var isAppForeground = false
+
     private var focusRequest: AudioFocusRequest? = null
 
     private val audioFocusListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
@@ -122,12 +121,22 @@ class RealTimeAudioEngine(
         }
     }
 
-    fun updateNoiseGate(config: NoiseGateConfig) {
-        noiseGate.updateConfig(config)
+    fun updateEffectsRack(config: EffectsRackConfig) {
+        effectsRack.updateConfig(config)
     }
 
     fun updateVoiceChanger(config: VoiceChangerConfig) {
         voiceChanger.updateConfig(config)
+    }
+
+    fun setAppForeground(foreground: Boolean) {
+        if (isAppForeground == foreground) return
+        isAppForeground = foreground
+        syncEngineLifecycle()
+    }
+
+    fun onPermissionChanged() {
+        syncEngineLifecycle()
     }
 
     fun updateMonitoringConfig(newConfig: MonitoringConfig) {
@@ -292,10 +301,11 @@ class RealTimeAudioEngine(
     }
 
     private fun syncEngineLifecycle() {
-        val needsEngine = _monitoringConfig.value.livePreviewEnabled ||
+        val activeAudioUse = _monitoringConfig.value.livePreviewEnabled ||
             _recordingStatus.value != RecordingStatus.IDLE
+        val needsEngine = activeAudioUse || (isAppForeground && hasRecordPermission())
 
-        if (needsEngine && !hasRecordPermission()) {
+        if (activeAudioUse && !hasRecordPermission()) {
             _monitoringConfig.value = _monitoringConfig.value.copy(livePreviewEnabled = false)
             onEngineError("Microphone permission is required.")
             return
@@ -368,7 +378,7 @@ class RealTimeAudioEngine(
 
         highPassFilter.reset()
         packetLossConcealment.reset()
-        noiseGate.reset()
+        effectsRack.reset()
         voiceChanger.reset()
         monitoringDelayLine.reset()
         smoothedMonitorGain = _monitoringConfig.value.previewVolumePercent / 100f
@@ -426,7 +436,9 @@ class RealTimeAudioEngine(
                     if (audioRecord == null || audioRecord.state != AudioRecord.STATE_INITIALIZED) {
                         runCatching { audioRecord?.release() }
                         audioRecord = null
-                        onEngineError("Unable to initialize microphone capture at $inputRateHz Hz.")
+                        if (monCfg.livePreviewEnabled || _recordingStatus.value != RecordingStatus.IDLE) {
+                            onEngineError("Unable to initialize microphone capture at $inputRateHz Hz.")
+                        }
                         break
                     }
 
@@ -509,26 +521,10 @@ class RealTimeAudioEngine(
                     count48k = resampler?.process(rawFloatBuffer, framesRead, resampled48kBuffer)
                         ?: framesRead
                     if (count48k <= 0) continue
-
-                    // 4. Proximity & Plosive 120 Hz 4th-order Butterworth High-Pass Filter
-                    highPassFilter.processInPlace(resampled48kBuffer, count48k)
-
-                    // Record clean valid frame into PLC history (and smooth recovery crossfade if recovering)
-                    packetLossConcealment.recordValidFrame(resampled48kBuffer, count48k)
                 }
 
-                if (monitorOutBuffer.size < count48k) {
-                    monitorOutBuffer = FloatArray(count48k * 2)
-                    trackShortBuffer = ShortArray(count48k * 2)
-                }
-
-                // 5. Noise Gate (shared pipeline)
-                noiseGate.processInPlace(resampled48kBuffer, count48k)
-
-                // 6. Voice Changer DSP (shared pipeline)
-                voiceChanger.processInPlace(resampled48kBuffer, count48k)
-
-                // 7. Compute metering on processed signal
+                // 4. Measure true real-time microphone input level BEFORE DSP / Voice Changer
+                //    so Home Screen level animation stays accurate regardless of Voice Changer or Preview state
                 var blockClip = false
                 for (i in 0 until count48k) {
                     val s = resampled48kBuffer[i]
@@ -544,14 +540,38 @@ class RealTimeAudioEngine(
                     clipHoldFrames--
                 }
 
-                // 8. Branch B: Recording Output (ZERO monitoring delay, 100% unity recording gain!)
-                val writer = wavWriter
-                if (writer != null && writer.isOpen && !isRecordingPaused &&
-                    _recordingStatus.value == RecordingStatus.RECORDING
-                ) {
-                    val clips = writer.writeSamples(resampled48kBuffer, count48k)
-                    if (clips > 0) {
-                        accumulatedClipCount += clips
+                val isRecordingActive = _recordingStatus.value == RecordingStatus.RECORDING && !isRecordingPaused
+                val needsDspProcessing = previewOn || isRecordingActive
+
+                if (needsDspProcessing) {
+                    if (framesRead > 0) {
+                        // Proximity & Plosive 120 Hz 4th-order Butterworth High-Pass Filter
+                        highPassFilter.processInPlace(resampled48kBuffer, count48k)
+                        // Record clean valid frame into PLC history
+                        packetLossConcealment.recordValidFrame(resampled48kBuffer, count48k)
+                    }
+
+                    if (monitorOutBuffer.size < count48k) {
+                        monitorOutBuffer = FloatArray(count48k * 2)
+                        trackShortBuffer = ShortArray(count48k * 2)
+                    }
+
+                    // 5. Noise Gate (runs before Voice Changer so room noise doesn't trigger pitch tracker)
+                    effectsRack.processPreVoiceChanger(resampled48kBuffer, count48k)
+
+                    // 6. Voice Changer DSP (independent module; completely bypassed when OFF)
+                    voiceChanger.processInPlace(resampled48kBuffer, count48k)
+
+                    // 7. Post-Voice-Changer Effects (High-pass, Low-pass, Equalizer, Echo, Reverb, Hall)
+                    effectsRack.processPostVoiceChanger(resampled48kBuffer, count48k)
+
+                    // 8. Branch B: Recording Output (ZERO monitoring delay, 100% unity recording gain!)
+                    val writer = wavWriter
+                    if (writer != null && writer.isOpen && isRecordingActive) {
+                        val clips = writer.writeSamples(resampled48kBuffer, count48k)
+                        if (clips > 0) {
+                            accumulatedClipCount += clips
+                        }
                     }
                 }
 
@@ -605,8 +625,8 @@ class RealTimeAudioEngine(
                         peakDb = peakDb,
                         isClipping = clipHoldFrames > 0,
                         clipCount = accumulatedClipCount,
-                        gateOpen = noiseGate.lastIsGateOpen,
-                        gateGainReductionDb = noiseGate.lastGainReductionDb,
+                        gateOpen = effectsRack.noiseGate.lastIsGateOpen,
+                        gateGainReductionDb = effectsRack.noiseGate.lastGainReductionDb,
                         recordingDurationMs = wavWriter?.getRecordedDurationMs() ?: _metrics.value.recordingDurationMs,
                         estimatedMonitoringLatencyMs = estLatency
                     )
@@ -664,12 +684,7 @@ class RealTimeAudioEngine(
     ): Int {
         val captureMs = (captureFrames * 1000f) / inputRateHz.coerceAtLeast(8000)
         val vc = voiceChanger.getConfig()
-        val dspActive = !vc.bypass && (
-            abs(vc.pitchSemitones) > 0.01f ||
-                vc.fineTuneCents != 0 ||
-                abs(vc.formantSemitones) > 0.01f
-            )
-        val dspMs = if (dspActive) 10.7f else 0f // 512-sample STFT @ 48 kHz
+        val dspMs = if (vc.enabled && vc.pitchLevelPercent > 0) 30.8f else 0f
         val trackMs = (trackFrames * 1000f) / AudioConfig.OUTPUT_SAMPLE_RATE_HZ
         val addedMs = _monitoringConfig.value.addedOutputDelayMs.toFloat()
         return (captureMs + dspMs + trackMs * 0.5f + addedMs).roundToInt().coerceAtLeast(5)

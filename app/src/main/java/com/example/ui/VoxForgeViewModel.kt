@@ -20,7 +20,14 @@ import com.example.audio.UsbMicrophoneManager
 import com.example.data.RecordingFileManager
 import com.example.data.RecordingItem
 import com.example.data.SettingsRepository
+import com.example.dsp.EchoConfig
+import com.example.dsp.EffectsRackConfig
+import com.example.dsp.EqualizerConfig
+import com.example.dsp.HallConfig
+import com.example.dsp.HighPassConfig
+import com.example.dsp.LowPassConfig
 import com.example.dsp.NoiseGateConfig
+import com.example.dsp.ReverbConfig
 import com.example.dsp.VoiceChangerConfig
 import com.example.dsp.VoicePreset
 import com.example.service.RecordingForegroundService
@@ -35,7 +42,7 @@ import kotlin.math.roundToInt
 enum class StudioTab {
     RECORDER,
     VOICE_CHANGER,
-    NOISE_GATE
+    EFFECTS
 }
 
 class VoxForgeViewModel(application: Application) : AndroidViewModel(application) {
@@ -52,8 +59,8 @@ class VoxForgeViewModel(application: Application) : AndroidViewModel(application
     private val _voiceChangerConfig = MutableStateFlow(VoiceChangerConfig())
     val voiceChangerConfig: StateFlow<VoiceChangerConfig> = _voiceChangerConfig.asStateFlow()
 
-    private val _noiseGateConfig = MutableStateFlow(NoiseGateConfig())
-    val noiseGateConfig: StateFlow<NoiseGateConfig> = _noiseGateConfig.asStateFlow()
+    private val _effectsConfig = MutableStateFlow(EffectsRackConfig())
+    val effectsConfig: StateFlow<EffectsRackConfig> = _effectsConfig.asStateFlow()
 
     private val _recordings = MutableStateFlow<List<RecordingItem>>(emptyList())
     val recordings: StateFlow<List<RecordingItem>> = _recordings.asStateFlow()
@@ -115,9 +122,9 @@ class VoxForgeViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch(Dispatchers.IO) {
             val saved = settingsRepo.settingsFlow.first()
             _voiceChangerConfig.value = saved.voiceChanger
-            _noiseGateConfig.value = saved.noiseGate
+            _effectsConfig.value = saved.effectsRack
             audioEngine.updateVoiceChanger(saved.voiceChanger)
-            audioEngine.updateNoiseGate(saved.noiseGate)
+            audioEngine.updateEffectsRack(saved.effectsRack)
             audioEngine.updateMonitoringConfig(
                 MonitoringConfig(
                     livePreviewEnabled = false,
@@ -136,6 +143,13 @@ class VoxForgeViewModel(application: Application) : AndroidViewModel(application
         if (granted && changed) {
             usbMicManager.refreshDevices()
         }
+        if (changed) {
+            audioEngine.onPermissionChanged()
+        }
+    }
+
+    fun setAppForeground(foreground: Boolean) {
+        audioEngine.setAppForeground(foreground)
     }
 
     fun selectTab(tab: StudioTab) {
@@ -237,85 +251,55 @@ class VoxForgeViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    // --- Voice Changer Controls ---
+    // --- Voice Changer Controls (5 presets, ON/OFF default OFF, 3 controls) ---
+
+    fun setVoiceChangerEnabled(enabled: Boolean) {
+        applyVoiceChangerConfig(_voiceChangerConfig.value.copy(enabled = enabled))
+    }
 
     fun selectVoicePreset(preset: VoicePreset) {
-        val currentBypass = _voiceChangerConfig.value.bypass
-        val updated = preset.defaultConfig().copy(bypass = currentBypass)
+        val currentlyEnabled = _voiceChangerConfig.value.enabled
+        val updated = preset.defaultConfig(enabled = currentlyEnabled)
         applyVoiceChangerConfig(updated)
     }
 
     fun resetVoicePresetToDefault() {
         val current = _voiceChangerConfig.value
-        val updated = current.preset.defaultConfig().copy(bypass = current.bypass)
+        val updated = current.preset.defaultConfig(enabled = current.enabled)
         applyVoiceChangerConfig(updated)
     }
 
-    fun updatePitch(pitchSemitones: Float) {
-        val snapped = (pitchSemitones / VoiceChangerConfig.STEP_PITCH_ST).roundToInt() *
-            VoiceChangerConfig.STEP_PITCH_ST
+    fun updateVoicePitchLevel(percent: Int) {
         applyVoiceChangerConfig(
             _voiceChangerConfig.value.copy(
-                pitchSemitones = snapped.coerceIn(
-                    VoiceChangerConfig.MIN_PITCH_ST,
-                    VoiceChangerConfig.MAX_PITCH_ST
+                pitchLevelPercent = percent.coerceIn(
+                    VoiceChangerConfig.MIN_LEVEL_PCT,
+                    VoiceChangerConfig.MAX_LEVEL_PCT
                 )
             )
         )
     }
 
-    fun updateFormant(formantSemitones: Float) {
-        val snapped = (formantSemitones / VoiceChangerConfig.STEP_FORMANT_ST).roundToInt() *
-            VoiceChangerConfig.STEP_FORMANT_ST
+    fun updateVoiceToneLevel(percent: Int) {
         applyVoiceChangerConfig(
             _voiceChangerConfig.value.copy(
-                formantSemitones = snapped.coerceIn(
-                    VoiceChangerConfig.MIN_FORMANT_ST,
-                    VoiceChangerConfig.MAX_FORMANT_ST
+                toneLevelPercent = percent.coerceIn(
+                    VoiceChangerConfig.MIN_LEVEL_PCT,
+                    VoiceChangerConfig.MAX_LEVEL_PCT
                 )
             )
         )
     }
 
-    fun updateFineTune(fineTuneCents: Int) {
-        val snapped = (fineTuneCents.toFloat() / VoiceChangerConfig.STEP_FINE_TUNE_CENTS).roundToInt() *
-            VoiceChangerConfig.STEP_FINE_TUNE_CENTS
+    fun updateVoiceClarity(percent: Int) {
         applyVoiceChangerConfig(
             _voiceChangerConfig.value.copy(
-                fineTuneCents = snapped.coerceIn(
-                    VoiceChangerConfig.MIN_FINE_TUNE_CENTS,
-                    VoiceChangerConfig.MAX_FINE_TUNE_CENTS
+                clarityPercent = percent.coerceIn(
+                    VoiceChangerConfig.MIN_LEVEL_PCT,
+                    VoiceChangerConfig.MAX_LEVEL_PCT
                 )
             )
         )
-    }
-
-    fun updateTimbre(timbreDb: Float) {
-        val snapped = (timbreDb / VoiceChangerConfig.STEP_TIMBRE_DB).roundToInt() *
-            VoiceChangerConfig.STEP_TIMBRE_DB
-        applyVoiceChangerConfig(
-            _voiceChangerConfig.value.copy(
-                timbreDb = snapped.coerceIn(
-                    VoiceChangerConfig.MIN_TIMBRE_DB,
-                    VoiceChangerConfig.MAX_TIMBRE_DB
-                )
-            )
-        )
-    }
-
-    fun updateDryWet(dryWetPercent: Int) {
-        applyVoiceChangerConfig(
-            _voiceChangerConfig.value.copy(
-                dryWetPercent = dryWetPercent.coerceIn(
-                    VoiceChangerConfig.MIN_DRY_WET_PCT,
-                    VoiceChangerConfig.MAX_DRY_WET_PCT
-                )
-            )
-        )
-    }
-
-    fun setVoiceChangerBypass(bypass: Boolean) {
-        applyVoiceChangerConfig(_voiceChangerConfig.value.copy(bypass = bypass))
     }
 
     private fun applyVoiceChangerConfig(config: VoiceChangerConfig) {
@@ -374,60 +358,41 @@ class VoxForgeViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    // --- Noise Gate Controls ---
+    // --- Effects Rack Controls ---
 
-    fun setNoiseGateEnabled(enabled: Boolean) {
-        applyNoiseGateConfig(_noiseGateConfig.value.copy(enabled = enabled))
+    fun updateNoiseGateConfig(config: NoiseGateConfig) {
+        applyEffectsRack(_effectsConfig.value.copy(noiseGate = config))
     }
 
-    fun updateGateThreshold(thresholdDb: Float) {
-        val snapped = (thresholdDb / NoiseGateConfig.STEP_THRESHOLD_DB).roundToInt() *
-            NoiseGateConfig.STEP_THRESHOLD_DB
-        applyNoiseGateConfig(
-            _noiseGateConfig.value.copy(
-                thresholdDb = snapped.coerceIn(
-                    NoiseGateConfig.MIN_THRESHOLD_DB,
-                    NoiseGateConfig.MAX_THRESHOLD_DB
-                )
-            )
-        )
+    fun updateLowPassConfig(config: LowPassConfig) {
+        applyEffectsRack(_effectsConfig.value.copy(lowPass = config))
     }
 
-    fun updateGateAttack(attackMs: Float) {
-        val snapped = (attackMs / NoiseGateConfig.STEP_ATTACK_MS).roundToInt() *
-            NoiseGateConfig.STEP_ATTACK_MS
-        applyNoiseGateConfig(
-            _noiseGateConfig.value.copy(
-                attackMs = snapped.coerceIn(
-                    NoiseGateConfig.MIN_ATTACK_MS,
-                    NoiseGateConfig.MAX_ATTACK_MS
-                )
-            )
-        )
+    fun updateHighPassConfig(config: HighPassConfig) {
+        applyEffectsRack(_effectsConfig.value.copy(highPass = config))
     }
 
-    fun updateGateRelease(releaseMs: Float) {
-        val snapped = (releaseMs / NoiseGateConfig.STEP_RELEASE_MS).roundToInt() *
-            NoiseGateConfig.STEP_RELEASE_MS
-        applyNoiseGateConfig(
-            _noiseGateConfig.value.copy(
-                releaseMs = snapped.coerceIn(
-                    NoiseGateConfig.MIN_RELEASE_MS,
-                    NoiseGateConfig.MAX_RELEASE_MS
-                )
-            )
-        )
+    fun updateEqualizerConfig(config: EqualizerConfig) {
+        applyEffectsRack(_effectsConfig.value.copy(equalizer = config))
     }
 
-    fun resetNoiseGateToDefault() {
-        applyNoiseGateConfig(NoiseGateConfig(enabled = _noiseGateConfig.value.enabled))
+    fun updateReverbConfig(config: ReverbConfig) {
+        applyEffectsRack(_effectsConfig.value.copy(reverb = config))
     }
 
-    private fun applyNoiseGateConfig(config: NoiseGateConfig) {
-        _noiseGateConfig.value = config
-        audioEngine.updateNoiseGate(config)
+    fun updateEchoConfig(config: EchoConfig) {
+        applyEffectsRack(_effectsConfig.value.copy(echo = config))
+    }
+
+    fun updateHallConfig(config: HallConfig) {
+        applyEffectsRack(_effectsConfig.value.copy(hall = config))
+    }
+
+    private fun applyEffectsRack(config: EffectsRackConfig) {
+        _effectsConfig.value = config
+        audioEngine.updateEffectsRack(config)
         viewModelScope.launch(Dispatchers.IO) {
-            settingsRepo.saveNoiseGate(config)
+            settingsRepo.saveEffectsRack(config)
         }
     }
 

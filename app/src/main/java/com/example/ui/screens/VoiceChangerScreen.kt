@@ -15,8 +15,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Headphones
@@ -39,11 +39,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.example.R
 import com.example.audio.AudioHardwareState
 import com.example.audio.LiveAudioMetrics
 import com.example.audio.MonitoringConfig
@@ -62,7 +60,6 @@ import com.example.ui.theme.StudioPanelElevated
 import com.example.ui.theme.StudioRack
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextSecondary
-import java.util.Locale
 import kotlin.math.roundToInt
 
 @Composable
@@ -71,14 +68,12 @@ fun VoiceChangerScreen(
     monitoringConfig: MonitoringConfig,
     hardwareState: AudioHardwareState,
     metrics: LiveAudioMetrics,
+    onEnabledChanged: (Boolean) -> Unit,
     onSelectPreset: (VoicePreset) -> Unit,
     onResetPreset: () -> Unit,
-    onBypassChanged: (Boolean) -> Unit,
-    onPitchChanged: (Float) -> Unit,
-    onFormantChanged: (Float) -> Unit,
-    onFineTuneChanged: (Int) -> Unit,
-    onTimbreChanged: (Float) -> Unit,
-    onDryWetChanged: (Int) -> Unit,
+    onPitchLevelChanged: (Int) -> Unit,
+    onToneLevelChanged: (Int) -> Unit,
+    onClarityChanged: (Int) -> Unit,
     onLivePreviewToggle: (Boolean) -> Unit,
     onMonitoringDelayChanged: (Float) -> Unit,
     onResetMonitoringDelay: () -> Unit,
@@ -110,91 +105,248 @@ fun VoiceChangerScreen(
                 onEchoCancellationToggle = onEchoCancellationToggle
             )
 
-            // 2. Voice Presets & Bypass Bar
-            VoicePresetAndBypassCard(
+            // 2. Voice Changer Module Card (ON/OFF toggle, default OFF + 5 fixed presets)
+            VoiceChangerPresetCard(
                 config = config,
+                onEnabledChanged = onEnabledChanged,
                 onSelectPreset = onSelectPreset,
-                onResetPreset = onResetPreset,
-                onBypassChanged = onBypassChanged
+                onResetPreset = onResetPreset
             )
 
-            // 3. Five DSP Parameter Sliders
-            val controlsActive = !config.bypass
+            // 3. ONLY Three User-Adjustable Controls: Pitch Level, Tone Level, Clarity
+            val controlsActive = config.enabled
 
             DspParameterSlider(
-                label = "Pitch",
-                valueText = String.format(Locale.US, "%+.1f st", config.pitchSemitones),
-                value = config.pitchSemitones,
-                valueRange = VoiceChangerConfig.MIN_PITCH_ST..VoiceChangerConfig.MAX_PITCH_ST,
-                step = VoiceChangerConfig.STEP_PITCH_ST,
-                minLabel = "-12.0 st",
-                maxLabel = "+12.0 st",
+                label = "Pitch Level",
+                valueText = "${config.pitchLevelPercent}%",
+                value = config.pitchLevelPercent.toFloat(),
+                valueRange = VoiceChangerConfig.MIN_LEVEL_PCT.toFloat()..VoiceChangerConfig.MAX_LEVEL_PCT.toFloat(),
+                step = VoiceChangerConfig.STEP_LEVEL_PCT.toFloat(),
+                minLabel = "0% (No Pitch Shift)",
+                maxLabel = "100% (Full Voice)",
                 enabled = controlsActive,
                 accentColor = CyanSignal,
-                testTagPrefix = "vc_pitch",
-                onValueChange = onPitchChanged
-            )
-
-            DspParameterSlider(
-                label = "Formant",
-                valueText = String.format(Locale.US, "%+.1f st", config.formantSemitones),
-                value = config.formantSemitones,
-                valueRange = VoiceChangerConfig.MIN_FORMANT_ST..VoiceChangerConfig.MAX_FORMANT_ST,
-                step = VoiceChangerConfig.STEP_FORMANT_ST,
-                minLabel = "-12.0 st (Deep)",
-                maxLabel = "+12.0 st (Light)",
-                enabled = controlsActive,
-                accentColor = CyanSignal,
-                testTagPrefix = "vc_formant",
-                onValueChange = onFormantChanged
+                testTagPrefix = "vc_pitch_level",
+                onValueChange = { onPitchLevelChanged(it.roundToInt()) }
             )
 
             DspParameterSlider(
-                label = "Fine Tune",
-                valueText = String.format(Locale.US, "%+d cents", config.fineTuneCents),
-                value = config.fineTuneCents.toFloat(),
-                valueRange = VoiceChangerConfig.MIN_FINE_TUNE_CENTS.toFloat()..VoiceChangerConfig.MAX_FINE_TUNE_CENTS.toFloat(),
-                step = VoiceChangerConfig.STEP_FINE_TUNE_CENTS.toFloat(),
-                minLabel = "-100 cents",
-                maxLabel = "+100 cents",
+                label = "Tone Level",
+                valueText = "${config.toneLevelPercent}%",
+                value = config.toneLevelPercent.toFloat(),
+                valueRange = VoiceChangerConfig.MIN_LEVEL_PCT.toFloat()..VoiceChangerConfig.MAX_LEVEL_PCT.toFloat(),
+                step = VoiceChangerConfig.STEP_LEVEL_PCT.toFloat(),
+                minLabel = "0% (Original Tone)",
+                maxLabel = "100% (Full Tone)",
                 enabled = controlsActive,
                 accentColor = CyanSignal,
-                testTagPrefix = "vc_finetune",
-                onValueChange = { onFineTuneChanged(it.roundToInt()) }
+                testTagPrefix = "vc_tone_level",
+                onValueChange = { onToneLevelChanged(it.roundToInt()) }
             )
 
             DspParameterSlider(
-                label = "Timbre / Tone",
-                valueText = String.format(Locale.US, "%+.1f dB", config.timbreDb),
-                value = config.timbreDb,
-                valueRange = VoiceChangerConfig.MIN_TIMBRE_DB..VoiceChangerConfig.MAX_TIMBRE_DB,
-                step = VoiceChangerConfig.STEP_TIMBRE_DB,
-                minLabel = "-12.0 dB (Warm)",
-                maxLabel = "+12.0 dB (Crisp)",
+                label = "Clarity",
+                valueText = "${config.clarityPercent}%",
+                value = config.clarityPercent.toFloat(),
+                valueRange = VoiceChangerConfig.MIN_LEVEL_PCT.toFloat()..VoiceChangerConfig.MAX_LEVEL_PCT.toFloat(),
+                step = VoiceChangerConfig.STEP_LEVEL_PCT.toFloat(),
+                minLabel = "0% (Natural)",
+                maxLabel = "100% (High Clarity)",
                 enabled = controlsActive,
                 accentColor = CyanSignal,
-                testTagPrefix = "vc_timbre",
-                onValueChange = onTimbreChanged
-            )
-
-            DspParameterSlider(
-                label = "Dry / Wet Mix",
-                valueText = "${config.dryWetPercent}%",
-                value = config.dryWetPercent.toFloat(),
-                valueRange = VoiceChangerConfig.MIN_DRY_WET_PCT.toFloat()..VoiceChangerConfig.MAX_DRY_WET_PCT.toFloat(),
-                step = VoiceChangerConfig.STEP_DRY_WET_PCT.toFloat(),
-                minLabel = "0% (Dry)",
-                maxLabel = "100% (Wet)",
-                enabled = controlsActive,
-                accentColor = CyanSignal,
-                testTagPrefix = "vc_drywet",
-                onValueChange = { onDryWetChanged(it.roundToInt()) }
+                testTagPrefix = "vc_clarity",
+                onValueChange = { onClarityChanged(it.roundToInt()) }
             )
 
             Spacer(modifier = Modifier.height(8.dp))
         }
     }
 }
+
+@Composable
+private fun VoiceChangerPresetCard(
+    config: VoiceChangerConfig,
+    onEnabledChanged: (Boolean) -> Unit,
+    onSelectPreset: (VoicePreset) -> Unit,
+    onResetPreset: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        color = StudioPanel,
+        border = BorderStroke(
+            1.dp,
+            if (config.enabled) CyanSignal.copy(alpha = 0.7f) else StudioBorder
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Tune,
+                        contentDescription = "Voice Changer",
+                        tint = if (config.enabled) CyanSignal else TextSecondary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Column {
+                        Text(
+                            text = "Voice Changer",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = if (config.enabled) {
+                                "Active: ${config.preset.displayName} profile"
+                            } else {
+                                "OFF • Original microphone audio unchanged"
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (config.enabled) CyanSignal else TextSecondary
+                        )
+                    }
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = if (config.enabled) "ON" else "OFF",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = if (config.enabled) EmeraldSafe else TextMuted
+                    )
+                    Switch(
+                        checked = config.enabled,
+                        onCheckedChange = onEnabledChanged,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = StudioRack,
+                            checkedTrackColor = CyanSignal
+                        ),
+                        modifier = Modifier.testTag("voice_changer_switch")
+                    )
+                }
+            }
+
+            // Five Fixed Voice Presets: Normal, Female, Child, Girl, Woman
+            val presets = VoicePreset.entries
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    presets.take(3).forEach { preset ->
+                        PresetPillButton(
+                            preset = preset,
+                            selected = config.preset == preset,
+                            active = config.enabled,
+                            onClick = { onSelectPreset(preset) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    presets.drop(3).forEach { preset ->
+                        PresetPillButton(
+                            preset = preset,
+                            selected = config.preset == preset,
+                            active = config.enabled,
+                            onClick = { onSelectPreset(preset) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if (config.enabled) {
+                        "Natural PSOLA + Formant vocal profile"
+                    } else {
+                        "Turn ON to apply selected voice profile"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextMuted
+                )
+
+                OutlinedButton(
+                    onClick = onResetPreset,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                    modifier = Modifier.testTag("voice_reset_preset_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Refresh,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Reset Preset", style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PresetPillButton(
+    preset: VoicePreset,
+    selected: Boolean,
+    active: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val highlightColor = if (active) CyanSignal else TextPrimaryColorFallback(selected)
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(10.dp),
+        color = when {
+            selected && active -> CyanContainer
+            selected -> StudioPanelElevated
+            else -> StudioRack
+        },
+        border = BorderStroke(
+            1.dp,
+            when {
+                selected && active -> CyanSignal
+                selected -> TextSecondary
+                else -> StudioBorder
+            }
+        ),
+        modifier = modifier
+            .height(48.dp)
+            .testTag("preset_${preset.name.lowercase()}")
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(
+                text = preset.displayName,
+                style = MaterialTheme.typography.titleSmall,
+                color = if (selected) highlightColor else TextSecondary,
+                maxLines = 1
+            )
+        }
+    }
+}
+
+@Composable
+private fun TextPrimaryColorFallback(selected: Boolean) =
+    if (selected) MaterialTheme.colorScheme.onSurface else TextSecondary
 
 @Composable
 private fun LiveVoicePreviewCard(
@@ -305,7 +457,7 @@ private fun LiveVoicePreviewCard(
                 }
             }
 
-            // 2. Monitoring Delay Adjustment Slider directly underneath ON/OFF
+            // 2. Monitoring Delay Adjustment Slider
             Surface(
                 shape = MaterialTheme.shapes.medium,
                 color = StudioRack,
@@ -451,7 +603,7 @@ private fun LiveVoicePreviewCard(
                 }
             }
 
-            // 3. Preview Volume Boost Slider (100% starting, max 500%)
+            // 3. Preview Volume Boost Slider
             DspParameterSlider(
                 label = "Preview Volume",
                 valueText = "${monitoringConfig.previewVolumePercent}%",
@@ -466,7 +618,7 @@ private fun LiveVoicePreviewCard(
                 onValueChange = { onVolumeChanged(it.roundToInt()) }
             )
 
-            // 4. Echo Cancellation (AEC) + Audio Pipeline Protections
+            // 4. Echo Cancellation (AEC)
             Surface(
                 shape = MaterialTheme.shapes.medium,
                 color = StudioRack,
@@ -503,130 +655,6 @@ private fun LiveVoicePreviewCard(
                             modifier = Modifier.testTag("monitoring_aec_switch")
                         )
                     }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun VoicePresetAndBypassCard(
-    config: VoiceChangerConfig,
-    onSelectPreset: (VoicePreset) -> Unit,
-    onResetPreset: () -> Unit,
-    onBypassChanged: (Boolean) -> Unit
-) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.medium,
-        color = StudioPanel,
-        border = BorderStroke(1.dp, StudioBorder)
-    ) {
-        Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Tune,
-                        contentDescription = null,
-                        tint = CyanSignal,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Text(
-                        text = "Voice Presets",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = if (config.bypass) "BYPASSED" else "DSP ACTIVE",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                        color = if (config.bypass) AmberCaution else EmeraldSafe
-                    )
-                    Switch(
-                        checked = config.bypass,
-                        onCheckedChange = onBypassChanged,
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = StudioRack,
-                            checkedTrackColor = AmberCaution
-                        ),
-                        modifier = Modifier.testTag("voice_bypass_switch")
-                    )
-                }
-            }
-
-            // Exactly four presets: Normal, Girl, Boy, Child
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                VoicePreset.entries.forEach { preset ->
-                    val selected = config.preset == preset
-                    Surface(
-                        onClick = { onSelectPreset(preset) },
-                        shape = RoundedCornerShape(10.dp),
-                        color = if (selected) CyanContainer else StudioRack,
-                        border = BorderStroke(
-                            1.dp,
-                            if (selected) CyanSignal else StudioBorder
-                        ),
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(48.dp)
-                            .testTag("preset_${preset.name.lowercase()}")
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Text(
-                                text = preset.displayName,
-                                style = MaterialTheme.typography.titleSmall,
-                                color = if (selected) CyanSignal else TextSecondary
-                            )
-                        }
-                    }
-                }
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = if (config.bypass) {
-                        "Voice Changer bypassed (Noise Gate unaffected)"
-                    } else {
-                        "Preset: ${config.preset.displayName} • Pitch & Formant DSP"
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = TextSecondary
-                )
-
-                OutlinedButton(
-                    onClick = onResetPreset,
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                    modifier = Modifier.testTag("voice_reset_preset_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Refresh,
-                        contentDescription = null,
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Reset Preset", style = MaterialTheme.typography.labelSmall)
                 }
             }
         }

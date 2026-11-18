@@ -2,7 +2,7 @@
     <string name="app_name">VoxForge</string>
     <string name="tab_recorder">Recorder</string>
     <string name="tab_voice_changer">Voice Changer</string>
-    <string name="tab_noise_gate">Noise Gate</string>
+    <string name="tab_effects">Effects</string>
 
     <string name="notification_channel_name">VoxForge Audio Engine</string>
     <string name="notification_channel_desc">Keeps voiceover recording and live monitoring active in the background and when screen is off</string>
