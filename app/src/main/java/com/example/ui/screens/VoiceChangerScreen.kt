@@ -82,6 +82,8 @@ fun VoiceChangerScreen(
     onLivePreviewToggle: (Boolean) -> Unit,
     onMonitoringDelayChanged: (Float) -> Unit,
     onResetMonitoringDelay: () -> Unit,
+    onMonitoringVolumeChanged: (Int) -> Unit,
+    onEchoCancellationToggle: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -96,14 +98,16 @@ fun VoiceChangerScreen(
                 .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // 1. Live Voice Preview & Monitoring Delay Adjustment
+            // 1. Live Voice Preview, Monitoring Delay & Volume (0-500%)
             LiveVoicePreviewCard(
                 monitoringConfig = monitoringConfig,
                 hardwareState = hardwareState,
                 estimatedLatencyMs = metrics.estimatedMonitoringLatencyMs,
                 onLivePreviewToggle = onLivePreviewToggle,
                 onDelayChanged = onMonitoringDelayChanged,
-                onResetDelay = onResetMonitoringDelay
+                onResetDelay = onResetMonitoringDelay,
+                onVolumeChanged = onMonitoringVolumeChanged,
+                onEchoCancellationToggle = onEchoCancellationToggle
             )
 
             // 2. Voice Presets & Bypass Bar
@@ -199,7 +203,9 @@ private fun LiveVoicePreviewCard(
     estimatedLatencyMs: Int,
     onLivePreviewToggle: (Boolean) -> Unit,
     onDelayChanged: (Float) -> Unit,
-    onResetDelay: () -> Unit
+    onResetDelay: () -> Unit,
+    onVolumeChanged: (Int) -> Unit,
+    onEchoCancellationToggle: (Boolean) -> Unit
 ) {
     val zone = monitoringConfig.zone
     val addedMs = monitoringConfig.addedOutputDelayMs
@@ -442,6 +448,61 @@ private fun LiveVoicePreviewCard(
                         style = MaterialTheme.typography.labelSmall,
                         color = TextMuted
                     )
+                }
+            }
+
+            // 3. Preview Volume Boost Slider (100% starting, max 500%)
+            DspParameterSlider(
+                label = "Preview Volume",
+                valueText = "${monitoringConfig.previewVolumePercent}%",
+                value = monitoringConfig.previewVolumePercent.toFloat(),
+                valueRange = MonitoringConfig.MIN_VOLUME_PERCENT.toFloat()..MonitoringConfig.MAX_VOLUME_PERCENT.toFloat(),
+                step = MonitoringConfig.STEP_VOLUME_PERCENT.toFloat(),
+                minLabel = "0% (Mute)",
+                maxLabel = "500% (Max Boost)",
+                enabled = true,
+                accentColor = CyanSignal,
+                testTagPrefix = "monitoring_volume",
+                onValueChange = { onVolumeChanged(it.roundToInt()) }
+            )
+
+            // 4. Echo Cancellation (AEC) + Audio Pipeline Protections
+            Surface(
+                shape = MaterialTheme.shapes.medium,
+                color = StudioRack,
+                border = BorderStroke(1.dp, StudioBorder)
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Acoustic Echo Cancellation (AEC)",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Prevents speaker feedback crackle • Active: Low-Latency Burst, PLC & 120 Hz HPF",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextSecondary
+                            )
+                        }
+                        Switch(
+                            checked = monitoringConfig.echoCancellationEnabled,
+                            onCheckedChange = onEchoCancellationToggle,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = StudioRack,
+                                checkedTrackColor = EmeraldSafe
+                            ),
+                            modifier = Modifier.testTag("monitoring_aec_switch")
+                        )
+                    }
                 }
             }
         }

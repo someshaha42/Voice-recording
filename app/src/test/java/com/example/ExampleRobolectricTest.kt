@@ -78,6 +78,13 @@ class ExampleRobolectricTest {
         composeRule.onNodeWithTag("monitoring_delay_status")
             .assertTextContains("Default", substring = true)
 
+        // Verify Preview Volume starts at 100% and increments via + button, and AEC switch is present
+        composeRule.onNodeWithTag("monitoring_volume_value").performScrollTo().assertTextContains("100%")
+        composeRule.onNodeWithTag("monitoring_volume_plus").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("monitoring_volume_value").assertTextContains("110%")
+        composeRule.onNodeWithTag("monitoring_aec_switch").performScrollTo().assertIsDisplayed()
+
         // Switch to Noise Gate tab
         composeRule.onNodeWithTag("tab_noise_gate").performClick()
         composeRule.waitForIdle()

@@ -15,8 +15,8 @@ object AudioConfig {
     const val BYTES_PER_SAMPLE = OUTPUT_BITS_PER_SAMPLE / 8
     const val BYTES_PER_SECOND = OUTPUT_SAMPLE_RATE_HZ * OUTPUT_CHANNELS * BYTES_PER_SAMPLE // 96,000 B/s
 
-    const val DSP_HOP_SIZE = 256 // 5.33 ms @ 48 kHz
-    const val DSP_FFT_SIZE = 1024 // 21.33 ms @ 48 kHz
+    const val DSP_HOP_SIZE = 128 // 2.67 ms @ 48 kHz
+    const val DSP_FFT_SIZE = 512 // 10.67 ms @ 48 kHz
 }
 
 enum class RecordingStatus {

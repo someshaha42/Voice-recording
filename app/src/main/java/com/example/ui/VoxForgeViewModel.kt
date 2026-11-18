@@ -121,7 +121,9 @@ class VoxForgeViewModel(application: Application) : AndroidViewModel(application
             audioEngine.updateMonitoringConfig(
                 MonitoringConfig(
                     livePreviewEnabled = false,
-                    delaySliderPosition = saved.monitoringDelaySlider
+                    delaySliderPosition = saved.monitoringDelaySlider,
+                    previewVolumePercent = saved.monitoringVolumePercent,
+                    echoCancellationEnabled = saved.echoCancellationEnabled
                 )
             )
             refreshRecordingsSync()
@@ -348,6 +350,28 @@ class VoxForgeViewModel(application: Application) : AndroidViewModel(application
 
     fun resetMonitoringDelayToDefault() {
         updateMonitoringDelaySlider(MonitoringConfig.DEFAULT_SLIDER)
+    }
+
+    fun updateMonitoringVolume(volumePercent: Int) {
+        val snapped = (volumePercent.toFloat() / MonitoringConfig.STEP_VOLUME_PERCENT).roundToInt() *
+            MonitoringConfig.STEP_VOLUME_PERCENT
+        val clamped = snapped.coerceIn(
+            MonitoringConfig.MIN_VOLUME_PERCENT,
+            MonitoringConfig.MAX_VOLUME_PERCENT
+        )
+        val updated = audioEngine.monitoringConfig.value.copy(previewVolumePercent = clamped)
+        audioEngine.updateMonitoringConfig(updated)
+        viewModelScope.launch(Dispatchers.IO) {
+            settingsRepo.saveMonitoringVolumePercent(clamped)
+        }
+    }
+
+    fun setEchoCancellationEnabled(enabled: Boolean) {
+        val updated = audioEngine.monitoringConfig.value.copy(echoCancellationEnabled = enabled)
+        audioEngine.updateMonitoringConfig(updated)
+        viewModelScope.launch(Dispatchers.IO) {
+            settingsRepo.saveMonitoringAecEnabled(enabled)
+        }
     }
 
     // --- Noise Gate Controls ---

@@ -23,6 +23,8 @@ private val Context.voxForgeDataStore: DataStore<Preferences> by preferencesData
 data class PersistedAudioSettings(
     val voiceChanger: VoiceChangerConfig = VoiceChangerConfig(),
     val monitoringDelaySlider: Float = MonitoringConfig.DEFAULT_SLIDER,
+    val monitoringVolumePercent: Int = MonitoringConfig.DEFAULT_VOLUME_PERCENT,
+    val echoCancellationEnabled: Boolean = true,
     val noiseGate: NoiseGateConfig = NoiseGateConfig()
 )
 
@@ -38,6 +40,8 @@ class SettingsRepository(private val context: Context) {
         val VOICE_BYPASS = booleanPreferencesKey("voice_bypass")
 
         val MONITORING_DELAY_SLIDER = floatPreferencesKey("monitoring_delay_slider")
+        val MONITORING_VOLUME_PCT = intPreferencesKey("monitoring_volume_pct")
+        val MONITORING_AEC_ENABLED = booleanPreferencesKey("monitoring_aec_enabled")
 
         val GATE_ENABLED = booleanPreferencesKey("gate_enabled")
         val GATE_THRESHOLD_DB = floatPreferencesKey("gate_threshold_db")
@@ -62,6 +66,9 @@ class SettingsRepository(private val context: Context) {
             ),
             monitoringDelaySlider = (prefs[Keys.MONITORING_DELAY_SLIDER] ?: MonitoringConfig.DEFAULT_SLIDER)
                 .coerceIn(MonitoringConfig.MIN_SLIDER, MonitoringConfig.MAX_SLIDER),
+            monitoringVolumePercent = (prefs[Keys.MONITORING_VOLUME_PCT] ?: MonitoringConfig.DEFAULT_VOLUME_PERCENT)
+                .coerceIn(MonitoringConfig.MIN_VOLUME_PERCENT, MonitoringConfig.MAX_VOLUME_PERCENT),
+            echoCancellationEnabled = prefs[Keys.MONITORING_AEC_ENABLED] ?: true,
             noiseGate = NoiseGateConfig(
                 enabled = prefs[Keys.GATE_ENABLED] ?: true,
                 thresholdDb = prefs[Keys.GATE_THRESHOLD_DB] ?: NoiseGateConfig.DEFAULT_THRESHOLD_DB,
@@ -89,6 +96,21 @@ class SettingsRepository(private val context: Context) {
                 MonitoringConfig.MIN_SLIDER,
                 MonitoringConfig.MAX_SLIDER
             )
+        }
+    }
+
+    suspend fun saveMonitoringVolumePercent(volumePercent: Int) {
+        context.voxForgeDataStore.edit { prefs ->
+            prefs[Keys.MONITORING_VOLUME_PCT] = volumePercent.coerceIn(
+                MonitoringConfig.MIN_VOLUME_PERCENT,
+                MonitoringConfig.MAX_VOLUME_PERCENT
+            )
+        }
+    }
+
+    suspend fun saveMonitoringAecEnabled(enabled: Boolean) {
+        context.voxForgeDataStore.edit { prefs ->
+            prefs[Keys.MONITORING_AEC_ENABLED] = enabled
         }
     }
 

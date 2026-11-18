@@ -12,11 +12,14 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
 import android.os.Build
 import android.os.Process
 import androidx.core.content.ContextCompat
+import com.example.dsp.HighPassFilter
 import com.example.dsp.NoiseGateConfig
 import com.example.dsp.NoiseGateProcessor
+import com.example.dsp.PacketLossConcealment
 import com.example.dsp.VoiceChangerConfig
 import com.example.dsp.VoiceChangerDsp
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,19 +31,22 @@ import kotlin.math.log10
 import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
+import kotlin.math.tanh
 
 /**
  * Single shared real-time audio engine serving BOTH:
- *  - Live Voice Preview / Direct Monitoring (Branch A, with adjustable MonitoringDelayLine)
+ *  - Live Voice Preview / Direct Monitoring (Branch A, with adjustable MonitoringDelayLine & 0-500% Volume)
  *  - 48 kHz / 16-bit / Mono WAV Recording (Branch B, zero monitoring delay)
  *
  * Pipeline:
- *   Microphone Capture (USB-C FIFINE AM8 or Built-in)
+ *   Microphone Capture (USB-C FIFINE AM8 or Built-in) + Hardware AEC (when enabled)
  *   -> Resample to 48 kHz (pass-through when capture is already 48 kHz)
+ *   -> 120 Hz 4th-order Butterworth High-Pass Filter (removes proximity boom & rumble)
+ *   -> Packet Loss Concealment (PLC for wireless / jitter drops)
  *   -> Noise Gate Processor (if enabled)
  *   -> Voice Changer DSP (if not bypassed)
  *   -> Processed Audio Signal
- *       ├── Branch A (if Live Voice Preview ON): MonitoringDelayLine -> AudioTrack
+ *       ├── Branch A (if Live Voice Preview ON): MonitoringDelayLine -> Volume Gain (0-500%) & Limiter -> Low-Latency AudioTrack
  *       └── Branch B (if Recording ACTIVE): WavPcmWriter (48 kHz, 16-bit, Mono)
  */
 class RealTimeAudioEngine(
@@ -51,6 +57,8 @@ class RealTimeAudioEngine(
 ) {
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
+    private val highPassFilter = HighPassFilter(120.0, AudioConfig.OUTPUT_SAMPLE_RATE_HZ)
+    private val packetLossConcealment = PacketLossConcealment(AudioConfig.OUTPUT_SAMPLE_RATE_HZ)
     private val noiseGate = NoiseGateProcessor(AudioConfig.OUTPUT_SAMPLE_RATE_HZ)
     private val voiceChanger = VoiceChangerDsp(AudioConfig.OUTPUT_SAMPLE_RATE_HZ)
     private val monitoringDelayLine = MonitoringDelayLine(AudioConfig.OUTPUT_SAMPLE_RATE_HZ)
@@ -94,7 +102,10 @@ class RealTimeAudioEngine(
     private var clipHoldFrames = 0
 
     @Volatile
-    private var lastAppliedBufferMultiplier = 2.0f
+    private var lastAppliedBufferMultiplier = 1.25f
+
+    @Volatile
+    private var smoothedMonitorGain = 1.0f
 
     private var focusRequest: AudioFocusRequest? = null
 
@@ -106,7 +117,7 @@ class RealTimeAudioEngine(
                 handleAudioInterruption()
             }
             AudioManager.AUDIOFOCUS_GAIN -> {
-                // Keep INTERRUPTED_PAUSED so user consciously resumes, or flush cleanly
+                // Keep INTERRUPTED_PAUSED so user consciously resumes
             }
         }
     }
@@ -125,18 +136,29 @@ class RealTimeAudioEngine(
             delaySliderPosition = newConfig.delaySliderPosition.coerceIn(
                 MonitoringConfig.MIN_SLIDER,
                 MonitoringConfig.MAX_SLIDER
+            ),
+            previewVolumePercent = newConfig.previewVolumePercent.coerceIn(
+                MonitoringConfig.MIN_VOLUME_PERCENT,
+                MonitoringConfig.MAX_VOLUME_PERCENT
             )
         )
         _monitoringConfig.value = clamped
         monitoringDelayLine.setDelayMs(clamped.addedOutputDelayMs)
 
-        // Only recreate AudioTrack when buffer multiplier changes noticeably (Faster <-> Default boundary)
-        if (abs(clamped.bufferSizeMultiplier - lastAppliedBufferMultiplier) >= 0.20f) {
+        if (abs(clamped.bufferSizeMultiplier - lastAppliedBufferMultiplier) >= 0.08f) {
             lastAppliedBufferMultiplier = clamped.bufferSizeMultiplier
             rebuildTrackRequested = true
         }
 
+        if (clamped.echoCancellationEnabled != prev.echoCancellationEnabled && clamped.livePreviewEnabled) {
+            restartCaptureRequested = true
+        }
+
         if (clamped.livePreviewEnabled != prev.livePreviewEnabled) {
+            // If Live Voice Preview switched ON/OFF while speaker is active, re-align AEC capture mode if needed
+            if (shouldRunEngine && clamped.echoCancellationEnabled && !usbMicManager.hardwareState.value.isWiredHeadphoneConnected) {
+                restartCaptureRequested = true
+            }
             syncEngineLifecycle()
         } else {
             updateEstimatedLatencyOnly()
@@ -145,9 +167,7 @@ class RealTimeAudioEngine(
 
     fun onHardwareTopologyChanged(hardwareState: AudioHardwareState) {
         if (!shouldRunEngine) return
-        // Reconfigure capture device / sample rate seamlessly on USB mic hot-plug/unplug
         restartCaptureRequested = true
-        // Also refresh monitoring output device if headphones changed
         rebuildTrackRequested = true
     }
 
@@ -297,11 +317,12 @@ class RealTimeAudioEngine(
             if (t != null && t !== Thread.currentThread()) {
                 runCatching { t.join(500) }
             }
+            val burst = getHardwareBurstFrames()
             _metrics.value = LiveAudioMetrics(
                 estimatedMonitoringLatencyMs = estimateMonitoringLatencyMs(
                     AudioConfig.OUTPUT_SAMPLE_RATE_HZ,
-                    2048,
-                    2048
+                    AudioConfig.DSP_HOP_SIZE,
+                    burst * 2
                 )
             )
         }
@@ -310,12 +331,20 @@ class RealTimeAudioEngine(
     private fun updateEstimatedLatencyOnly() {
         val cur = _metrics.value
         val cfg = _monitoringConfig.value
+        val burst = getHardwareBurstFrames()
+        val trackFrames = if (cfg.zone == MonitoringLatencyZone.FASTER) burst else burst * 2
         val est = estimateMonitoringLatencyMs(
             usbMicManager.hardwareState.value.activeInputSampleRateHz,
-            1024,
-            (1024 * cfg.bufferSizeMultiplier).roundToInt()
+            AudioConfig.DSP_HOP_SIZE,
+            trackFrames
         )
         _metrics.value = cur.copy(estimatedMonitoringLatencyMs = est)
+    }
+
+    private fun getHardwareBurstFrames(): Int {
+        val prop = audioManager.getProperty(AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER)
+        val parsed = prop?.toIntOrNull()
+        return (parsed ?: 192).coerceIn(64, 512)
     }
 
     @SuppressLint("MissingPermission")
@@ -323,11 +352,13 @@ class RealTimeAudioEngine(
         Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
 
         var audioRecord: AudioRecord? = null
+        var echoCanceler: AcousticEchoCanceler? = null
         var audioTrack: AudioTrack? = null
         var resampler: LinearResampler? = null
         var inputRateHz = AudioConfig.OUTPUT_SAMPLE_RATE_HZ
-        var captureFrames = 256
-        var trackBufferFrames = 2048
+        var captureFrames = AudioConfig.DSP_HOP_SIZE
+        var trackBufferFrames = getHardwareBurstFrames() * 2
+        var lastUnderrunCount = 0
 
         var readShortBuffer = ShortArray(1024)
         var rawFloatBuffer = FloatArray(1024)
@@ -335,9 +366,12 @@ class RealTimeAudioEngine(
         var monitorOutBuffer = FloatArray(2048)
         var trackShortBuffer = ShortArray(2048)
 
+        highPassFilter.reset()
+        packetLossConcealment.reset()
         noiseGate.reset()
         voiceChanger.reset()
         monitoringDelayLine.reset()
+        smoothedMonitorGain = _monitoringConfig.value.previewVolumePercent / 100f
 
         var lastUiUpdateNs = 0L
         var uiRmsAccumSq = 0.0
@@ -346,25 +380,31 @@ class RealTimeAudioEngine(
 
         try {
             while (shouldRunEngine) {
+                val hw = usbMicManager.hardwareState.value
+                val monCfg = _monitoringConfig.value
+
                 // 1. Initialize or rebuild AudioRecord when needed
                 if (audioRecord == null || restartCaptureRequested) {
                     restartCaptureRequested = false
+                    runCatching { echoCanceler?.release() }
+                    echoCanceler = null
                     runCatching { audioRecord?.stop() }
                     runCatching { audioRecord?.release() }
                     audioRecord = null
 
-                    val hw = usbMicManager.hardwareState.value
                     inputRateHz = hw.activeInputSampleRateHz
-                    val mult = _monitoringConfig.value.bufferSizeMultiplier
+                    val mult = monCfg.bufferSizeMultiplier
                     val minRecBytes = AudioRecord.getMinBufferSize(
                         inputRateHz,
                         AudioFormat.CHANNEL_IN_MONO,
                         AudioFormat.ENCODING_PCM_16BIT
                     ).coerceAtLeast(1024)
 
-                    val targetRecBytes = max(minRecBytes, (minRecBytes * mult).roundToInt())
+                    // Optimize capture buffer size cleanly for low-latency live preview
+                    val burstCaptureBytes = ((inputRateHz * AudioConfig.DSP_HOP_SIZE) / AudioConfig.OUTPUT_SAMPLE_RATE_HZ) * 2 * 4
+                    val targetRecBytes = max(minRecBytes, (burstCaptureBytes * mult).roundToInt())
                     captureFrames = ((inputRateHz * AudioConfig.DSP_HOP_SIZE) / AudioConfig.OUTPUT_SAMPLE_RATE_HZ)
-                        .coerceIn(128, 1024)
+                        .coerceIn(64, 512)
 
                     if (readShortBuffer.size < captureFrames) {
                         readShortBuffer = ShortArray(captureFrames * 2)
@@ -372,10 +412,15 @@ class RealTimeAudioEngine(
                     }
 
                     resampler = LinearResampler(inputRateHz, AudioConfig.OUTPUT_SAMPLE_RATE_HZ)
+                    val preferAecMode = monCfg.livePreviewEnabled &&
+                        monCfg.echoCancellationEnabled &&
+                        !hw.isWiredHeadphoneConnected
+
                     audioRecord = createBestAudioRecord(
                         sampleRateHz = inputRateHz,
                         bufferBytes = targetRecBytes,
-                        preferredDevice = usbMicManager.preferredInputDeviceInfo
+                        preferredDevice = usbMicManager.preferredInputDeviceInfo,
+                        preferAecSource = preferAecMode
                     )
 
                     if (audioRecord == null || audioRecord.state != AudioRecord.STATE_INITIALIZED) {
@@ -384,11 +429,23 @@ class RealTimeAudioEngine(
                         onEngineError("Unable to initialize microphone capture at $inputRateHz Hz.")
                         break
                     }
+
+                    // Attach hardware Acoustic Echo Cancellation (AEC) when enabled
+                    if (monCfg.echoCancellationEnabled && monCfg.livePreviewEnabled && AcousticEchoCanceler.isAvailable()) {
+                        runCatching {
+                            val aec = AcousticEchoCanceler.create(audioRecord.audioSessionId)
+                            if (aec != null) {
+                                aec.enabled = true
+                                echoCanceler = aec
+                            }
+                        }
+                    }
+
                     audioRecord.startRecording()
                 }
 
                 // 2. Manage AudioTrack strictly according to Live Voice Preview ON/OFF
-                val previewOn = _monitoringConfig.value.livePreviewEnabled
+                val previewOn = monCfg.livePreviewEnabled
                 if (previewOn && (audioTrack == null || rebuildTrackRequested)) {
                     rebuildTrackRequested = false
                     runCatching { audioTrack?.pause() }
@@ -396,24 +453,27 @@ class RealTimeAudioEngine(
                     runCatching { audioTrack?.release() }
                     audioTrack = null
 
-                    val mult = _monitoringConfig.value.bufferSizeMultiplier
+                    val burstFrames = getHardwareBurstFrames()
+                    val desiredActiveFrames = when {
+                        hw.isBluetoothOutputConnected -> burstFrames * 4 // wireless PLC jitter cushion
+                        monCfg.zone == MonitoringLatencyZone.FASTER -> burstFrames
+                        else -> burstFrames * 2
+                    }
+
                     val minTrackBytes = AudioTrack.getMinBufferSize(
                         AudioConfig.OUTPUT_SAMPLE_RATE_HZ,
                         AudioFormat.CHANNEL_OUT_MONO,
                         AudioFormat.ENCODING_PCM_16BIT
                     ).coerceAtLeast(1024)
 
-                    // 2 bytes per mono 16-bit sample; size scaled cleanly between 1x and 2x min buffer
-                    val targetTrackBytes = max(
-                        minTrackBytes,
-                        ((minTrackBytes * (mult / 2.0f)).roundToInt() and 0x7FFFFFFE).coerceAtLeast(minTrackBytes)
-                    )
-                    trackBufferFrames = targetTrackBytes / 2
-
+                    val allocBytes = max(minTrackBytes, desiredActiveFrames * 2 * 2)
                     audioTrack = createLowLatencyAudioTrack(
-                        bufferBytes = targetTrackBytes,
+                        bufferBytes = allocBytes,
+                        desiredBufferFrames = desiredActiveFrames,
                         preferredOutput = usbMicManager.preferredOutputDeviceInfo
                     )
+                    trackBufferFrames = audioTrack?.bufferSizeInFrames ?: desiredActiveFrames
+                    lastUnderrunCount = audioTrack?.underrunCount ?: 0
                     monitoringDelayLine.reset()
                     audioTrack?.play()
                 } else if (!previewOn && audioTrack != null) {
@@ -424,9 +484,11 @@ class RealTimeAudioEngine(
                     rebuildTrackRequested = false
                 }
 
-                // 3. Read live microphone PCM
+                // 3. Read live microphone PCM with Packet Loss Concealment fallback on dropouts
                 val rec = audioRecord ?: break
                 val framesRead = rec.read(readShortBuffer, 0, captureFrames, AudioRecord.READ_BLOCKING)
+                var count48k: Int
+
                 if (framesRead <= 0) {
                     if (framesRead == AudioRecord.ERROR_INVALID_OPERATION ||
                         framesRead == AudioRecord.ERROR_DEAD_OBJECT
@@ -434,19 +496,26 @@ class RealTimeAudioEngine(
                         usbMicManager.refreshDevices()
                         restartCaptureRequested = true
                     }
-                    continue
+                    // Packet Loss Concealment on transient read drop so audio doesn't pop or mute abruptly
+                    count48k = AudioConfig.DSP_HOP_SIZE
+                    if (resampled48kBuffer.size < count48k) {
+                        resampled48kBuffer = FloatArray(count48k * 2)
+                    }
+                    packetLossConcealment.concealPacket(resampled48kBuffer, count48k)
+                } else {
+                    for (i in 0 until framesRead) {
+                        rawFloatBuffer[i] = readShortBuffer[i] / 32768.0f
+                    }
+                    count48k = resampler?.process(rawFloatBuffer, framesRead, resampled48kBuffer)
+                        ?: framesRead
+                    if (count48k <= 0) continue
+
+                    // 4. Proximity & Plosive 120 Hz 4th-order Butterworth High-Pass Filter
+                    highPassFilter.processInPlace(resampled48kBuffer, count48k)
+
+                    // Record clean valid frame into PLC history (and smooth recovery crossfade if recovering)
+                    packetLossConcealment.recordValidFrame(resampled48kBuffer, count48k)
                 }
-
-                // Convert 16-bit PCM to normalized [-1f, 1f]
-                for (i in 0 until framesRead) {
-                    rawFloatBuffer[i] = readShortBuffer[i] / 32768.0f
-                }
-
-                // 4. Resample to 48,000 Hz if needed
-                val count48k = resampler?.process(rawFloatBuffer, framesRead, resampled48kBuffer)
-                    ?: framesRead
-
-                if (count48k <= 0) continue
 
                 if (monitorOutBuffer.size < count48k) {
                     monitorOutBuffer = FloatArray(count48k * 2)
@@ -475,7 +544,7 @@ class RealTimeAudioEngine(
                     clipHoldFrames--
                 }
 
-                // 8. Branch B: Recording Output (ZERO monitoring delay!)
+                // 8. Branch B: Recording Output (ZERO monitoring delay, 100% unity recording gain!)
                 val writer = wavWriter
                 if (writer != null && writer.isOpen && !isRecordingPaused &&
                     _recordingStatus.value == RecordingStatus.RECORDING
@@ -486,21 +555,38 @@ class RealTimeAudioEngine(
                     }
                 }
 
-                // 9. Branch A: Live Monitoring Output (with MonitoringDelayLine)
+                // 9. Branch A: Live Monitoring Output (Delay + 0-500% Preview Volume + PLC Underrun Guard)
                 val track = audioTrack
                 if (previewOn && track != null && track.playState == AudioTrack.PLAYSTATE_PLAYING) {
-                    monitoringDelayLine.process(resampled48kBuffer, count48k, monitorOutBuffer)
-                    for (i in 0 until count48k) {
-                        val clamped = monitorOutBuffer[i].coerceIn(-1.0f, 1.0f)
-                        trackShortBuffer[i] = (clamped * 32767.0f).roundToInt().coerceIn(-32768, 32767).toShort()
+                    // Check wireless / output buffer underruns and cushion with PLC if needed
+                    val curUnderruns = track.underrunCount
+                    if (curUnderruns > lastUnderrunCount) {
+                        lastUnderrunCount = curUnderruns
+                        // Conceal brief extra cushion packet to bridge wireless Bluetooth jitter
+                        packetLossConcealment.concealPacket(monitorOutBuffer, count48k)
+                        writeMonitorSamples(
+                            track = track,
+                            floatSamples = monitorOutBuffer,
+                            shortBuffer = trackShortBuffer,
+                            count = count48k,
+                            targetGain = monCfg.previewVolumePercent / 100f
+                        )
                     }
-                    val written = track.write(trackShortBuffer, 0, count48k, AudioTrack.WRITE_NON_BLOCKING)
+
+                    monitoringDelayLine.process(resampled48kBuffer, count48k, monitorOutBuffer)
+                    val written = writeMonitorSamples(
+                        track = track,
+                        floatSamples = monitorOutBuffer,
+                        shortBuffer = trackShortBuffer,
+                        count = count48k,
+                        targetGain = monCfg.previewVolumePercent / 100f
+                    )
                     if (written == AudioTrack.ERROR_DEAD_OBJECT) {
                         rebuildTrackRequested = true
                     }
                 }
 
-                // 10. Throttled UI telemetry (~25 Hz) to minimize CPU & recompositions
+                // 10. Throttled UI telemetry (~25 Hz)
                 val nowNs = System.nanoTime()
                 if (nowNs - lastUiUpdateNs >= 40_000_000L && uiSampleCount > 0) {
                     lastUiUpdateNs = nowNs
@@ -533,11 +619,41 @@ class RealTimeAudioEngine(
         } catch (t: Throwable) {
             onEngineError("Audio engine interrupted: ${t.message ?: "Unknown error"}")
         } finally {
+            runCatching { echoCanceler?.release() }
             runCatching { audioRecord?.stop() }
             runCatching { audioRecord?.release() }
             runCatching { audioTrack?.pause() }
             runCatching { audioTrack?.flush() }
             runCatching { audioTrack?.release() }
+        }
+    }
+
+    private fun writeMonitorSamples(
+        track: AudioTrack,
+        floatSamples: FloatArray,
+        shortBuffer: ShortArray,
+        count: Int,
+        targetGain: Float
+    ): Int {
+        val alpha = 0.02f
+        for (i in 0 until count) {
+            smoothedMonitorGain += alpha * (targetGain - smoothedMonitorGain)
+            val amplified = floatSamples[i] * smoothedMonitorGain
+            // Soft-knee protection limiter keeps 500% monitoring boost smooth without harsh square-wave crackle
+            val limited = softProtectMonitor(amplified)
+            shortBuffer[i] = (limited * 32767.0f).roundToInt().coerceIn(-32768, 32767).toShort()
+        }
+        return track.write(shortBuffer, 0, count, AudioTrack.WRITE_NON_BLOCKING)
+    }
+
+    private fun softProtectMonitor(x: Float): Float {
+        val absX = abs(x)
+        return if (absX <= 0.80f) {
+            x
+        } else {
+            val excess = (absX - 0.80f) / 0.16f
+            val shaped = 0.80f + 0.16f * tanh(excess)
+            if (x >= 0f) shaped else -shaped
         }
     }
 
@@ -547,29 +663,32 @@ class RealTimeAudioEngine(
         trackFrames: Int
     ): Int {
         val captureMs = (captureFrames * 1000f) / inputRateHz.coerceAtLeast(8000)
-        // STFT DSP uses 256-sample hop; when pitch/formant shifts are neutral, DSP passes through without STFT delay
         val vc = voiceChanger.getConfig()
         val dspActive = !vc.bypass && (
             abs(vc.pitchSemitones) > 0.01f ||
                 vc.fineTuneCents != 0 ||
                 abs(vc.formantSemitones) > 0.01f
             )
-        val dspMs = if (dspActive) 21.3f else 0f
+        val dspMs = if (dspActive) 10.7f else 0f // 512-sample STFT @ 48 kHz
         val trackMs = (trackFrames * 1000f) / AudioConfig.OUTPUT_SAMPLE_RATE_HZ
         val addedMs = _monitoringConfig.value.addedOutputDelayMs.toFloat()
-        return (captureMs + dspMs + trackMs * 0.5f + addedMs).roundToInt().coerceAtLeast(8)
+        return (captureMs + dspMs + trackMs * 0.5f + addedMs).roundToInt().coerceAtLeast(5)
     }
 
     @SuppressLint("MissingPermission")
     private fun createBestAudioRecord(
         sampleRateHz: Int,
         bufferBytes: Int,
-        preferredDevice: AudioDeviceInfo?
+        preferredDevice: AudioDeviceInfo?,
+        preferAecSource: Boolean
     ): AudioRecord? {
         val supportsUnprocessed =
             audioManager.getProperty(AudioManager.PROPERTY_SUPPORT_AUDIO_SOURCE_UNPROCESSED) == "true"
 
         val sourceOrder = buildList {
+            if (preferAecSource) {
+                add(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+            }
             if (supportsUnprocessed) add(MediaRecorder.AudioSource.UNPROCESSED)
             add(MediaRecorder.AudioSource.VOICE_RECOGNITION)
             add(MediaRecorder.AudioSource.MIC)
@@ -605,6 +724,7 @@ class RealTimeAudioEngine(
 
     private fun createLowLatencyAudioTrack(
         bufferBytes: Int,
+        desiredBufferFrames: Int,
         preferredOutput: AudioDeviceInfo?
     ): AudioTrack? {
         return try {
@@ -630,8 +750,14 @@ class RealTimeAudioEngine(
             }
 
             val track = builder.build()
-            if (preferredOutput != null) {
-                track.setPreferredDevice(preferredOutput)
+            if (track.state == AudioTrack.STATE_INITIALIZED) {
+                // Tighten active buffer to hardware burst multiple for low-latency Live Voice Preview
+                runCatching {
+                    track.setBufferSizeInFrames(desiredBufferFrames.coerceIn(64, track.bufferCapacityInFrames))
+                }
+                if (preferredOutput != null) {
+                    track.setPreferredDevice(preferredOutput)
+                }
             }
             track
         } catch (_: Throwable) {

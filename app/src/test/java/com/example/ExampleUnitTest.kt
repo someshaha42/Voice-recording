@@ -6,8 +6,10 @@ import com.example.audio.MonitoringConfig
 import com.example.audio.MonitoringDelayLine
 import com.example.audio.MonitoringLatencyZone
 import com.example.audio.WavPcmWriter
+import com.example.dsp.HighPassFilter
 import com.example.dsp.NoiseGateConfig
 import com.example.dsp.NoiseGateProcessor
+import com.example.dsp.PacketLossConcealment
 import com.example.dsp.VoiceChangerDsp
 import com.example.dsp.VoicePreset
 import org.junit.Assert.assertEquals
@@ -133,7 +135,10 @@ class ExampleUnitTest {
         val defCfg = MonitoringConfig(livePreviewEnabled = true, delaySliderPosition = 0.0f)
         assertEquals(MonitoringLatencyZone.DEFAULT, defCfg.zone)
         assertEquals(0, defCfg.addedOutputDelayMs)
-        assertEquals(2.0f, defCfg.bufferSizeMultiplier, 0.001f)
+        assertEquals(1.25f, defCfg.bufferSizeMultiplier, 0.001f)
+        assertEquals(100, defCfg.previewVolumePercent)
+        assertEquals(500, MonitoringConfig.MAX_VOLUME_PERCENT)
+        assertTrue(defCfg.echoCancellationEnabled)
 
         val fastCfg = MonitoringConfig(livePreviewEnabled = true, delaySliderPosition = -1.0f)
         assertEquals(MonitoringLatencyZone.FASTER, fastCfg.zone)
@@ -165,5 +170,37 @@ class ExampleUnitTest {
         val output = FloatArray(6000)
         val outCount = resampler.process(input, input.size, output)
         assertTrue("Expected ~4800 resampled frames, got $outCount", outCount in 4780..4810)
+    }
+
+    @Test
+    fun high_pass_filter_attenuates_boomy_50hz_and_preserves_440hz_voice() {
+        val hpf = HighPassFilter(cutoffHz = 120.0, sampleRateHz = 48_000)
+
+        // 50 Hz proximity rumble should be strongly attenuated (> 20 dB)
+        val lowBoom = FloatArray(4800) { i -> (0.5f * sin(2.0 * PI * 50.0 * i / 48000.0)).toFloat() }
+        hpf.processInPlace(lowBoom, lowBoom.size)
+        val tailLowPeak = lowBoom.takeLast(1200).maxOf { abs(it) }
+        assertTrue("Expected 50 Hz boom attenuated below 0.05, got $tailLowPeak", tailLowPeak < 0.05f)
+
+        // Reset and verify 440 Hz voice tone passes cleanly
+        hpf.reset()
+        val voiceTone = FloatArray(4800) { i -> (0.5f * sin(2.0 * PI * 440.0 * i / 48000.0)).toFloat() }
+        hpf.processInPlace(voiceTone, voiceTone.size)
+        val tailVoicePeak = voiceTone.takeLast(1200).maxOf { abs(it) }
+        assertTrue("Expected 440 Hz voice preserved above 0.45, got $tailVoicePeak", tailVoicePeak > 0.45f)
+    }
+
+    @Test
+    fun packet_loss_concealment_synthesizes_smooth_waveform_on_dropped_packet() {
+        val plc = PacketLossConcealment(48_000)
+        // Feed ~20 ms of 200 Hz periodic voiced signal
+        val valid = FloatArray(960) { i -> (0.4f * sin(2.0 * PI * 200.0 * i / 48000.0)).toFloat() }
+        plc.recordValidFrame(valid, valid.size)
+
+        val concealed = FloatArray(128)
+        plc.concealPacket(concealed, concealed.size)
+        assertEquals(1, plc.concealmentEventsCount)
+        val concealedPeak = concealed.maxOf { abs(it) }
+        assertTrue("Expected non-zero pitch-concealed waveform, got $concealedPeak", concealedPeak > 0.1f)
     }
 }

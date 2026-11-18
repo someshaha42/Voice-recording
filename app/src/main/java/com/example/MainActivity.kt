@@ -365,7 +365,9 @@ fun VoxForgeApp(
                             onDryWetChanged = viewModel::updateDryWet,
                             onLivePreviewToggle = viewModel::setLiveVoicePreviewEnabled,
                             onMonitoringDelayChanged = viewModel::updateMonitoringDelaySlider,
-                            onResetMonitoringDelay = viewModel::resetMonitoringDelayToDefault
+                            onResetMonitoringDelay = viewModel::resetMonitoringDelayToDefault,
+                            onMonitoringVolumeChanged = viewModel::updateMonitoringVolume,
+                            onEchoCancellationToggle = viewModel::setEchoCancellationEnabled
                         )
 
                         StudioTab.NOISE_GATE -> NoiseGateScreen(

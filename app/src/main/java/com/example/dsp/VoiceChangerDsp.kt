@@ -183,7 +183,7 @@ class VoiceChangerDsp(
     private val omegaBin = FloatArray(halfBins)
 
     init {
-        val log2N = 10 // 2^10 = 1024
+        val log2N = 9 // 2^9 = 512 (low-latency 10.67 ms STFT frame)
         for (i in 0 until fftSize) {
             window[i] = (0.5 * (1.0 - cos(2.0 * PI * i / fftSize))).toFloat()
             var rev = 0
@@ -367,7 +367,7 @@ class VoiceChangerDsp(
         }
 
         // 2. Smooth spectral envelope (moving window liftering in log-magnitude domain)
-        val envHalfWidth = 10
+        val envHalfWidth = 6
         for (k in 0 until halfBins) {
             val lo = max(0, k - envHalfWidth)
             val hi = min(halfBins - 1, k + envHalfWidth)

@@ -16,7 +16,17 @@ data class MonitoringConfig(
      * - [0.0f]: Default (balanced stable buffer, 0 ms added output delay)
      * - [>0.0f .. +1.0f]: More Delay (adds 0 .. +200 ms calibrated delay exclusively to monitoring output)
      */
-    val delaySliderPosition: Float = 0.0f
+    val delaySliderPosition: Float = 0.0f,
+    /**
+     * Live Voice Preview headphone output volume boost (0% to 500%, default 100%).
+     * Applied exclusively to the monitoring output with soft-knee protection limiting.
+     */
+    val previewVolumePercent: Int = DEFAULT_VOLUME_PERCENT,
+    /**
+     * Enables Android hardware AcousticEchoCanceler (when available) + feedback protection
+     * during Live Voice Preview to prevent speaker crackle and howling feedback.
+     */
+    val echoCancellationEnabled: Boolean = true
 ) {
     val zone: MonitoringLatencyZone
         get() = when {
@@ -34,14 +44,14 @@ data class MonitoringConfig(
 
     /**
      * Buffer multiplier for AudioTrack/AudioRecord sizing:
-     * - Default (0.0f): 2.0x minimum buffer
-     * - Faster (-1.0f): 1.0x minimum stable buffer
+     * - Default (0.0f): 1.25x hardware burst buffer for low-latency live preview
+     * - Faster (-1.0f): 1.0x minimum stable hardware burst buffer
      */
     val bufferSizeMultiplier: Float
         get() = if (delaySliderPosition < 0f) {
-            (2.0f + delaySliderPosition.coerceIn(-1f, 0f) * 1.0f).coerceIn(1.0f, 2.0f)
+            (1.25f + delaySliderPosition.coerceIn(-1f, 0f) * 0.25f).coerceIn(1.0f, 1.25f)
         } else {
-            2.0f
+            1.25f
         }
 
     companion object {
@@ -50,6 +60,11 @@ data class MonitoringConfig(
         const val STEP_SLIDER = 0.05f
         const val DEFAULT_SLIDER = 0.0f
         const val MAX_ADDED_DELAY_MS = 200
+
+        const val MIN_VOLUME_PERCENT = 0
+        const val MAX_VOLUME_PERCENT = 500
+        const val STEP_VOLUME_PERCENT = 10
+        const val DEFAULT_VOLUME_PERCENT = 100
     }
 }
 
