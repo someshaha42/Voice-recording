@@ -1,0 +1,140 @@
+@import "tailwindcss";
+
+@font-face {
+  font-family: "Space Grotesk";
+  src: url("/fonts/space_grotesk.ttf") format("truetype");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/inter.ttf") format("truetype");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/jetbrains_mono.ttf") format("truetype");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: dark;
+  --studio-obsidian: #0b0e14;
+  --studio-rack: #131822;
+  --studio-panel: #1a2130;
+  --studio-panel-elevated: #222b3d;
+  --studio-border: #2c374d;
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --record-coral: #ff4d4d;
+  --record-coral-container: #3e151b;
+  --cyan-signal: #00d4ff;
+  --cyan-container: #0e303d;
+  --emerald-safe: #22c55e;
+  --emerald-container: #123222;
+  --amber-caution: #f59e0b;
+  --amber-container: #3a280c;
+}
+
+body {
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  background-color: var(--studio-obsidian);
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.font-display {
+  font-family: "Space Grotesk", "Inter", sans-serif;
+}
+
+.font-mono-tnum,
+.font-mono-tabular {
+  font-family: "JetBrains Mono", monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Custom studio range input */
+input[type="range"].studio-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: 9999px;
+  background: #131822;
+  outline: none;
+  cursor: pointer;
+}
+
+input[type="range"].studio-slider:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+input[type="range"].studio-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--slider-accent, #00d4ff);
+  border: 2px solid #0b0e14;
+  box-shadow: 0 0 0 1px rgba(0, 212, 255, 0.35);
+  transition: transform 120ms ease;
+}
+
+input[type="range"].studio-slider:not(:disabled)::-webkit-slider-thumb:hover {
+  transform: scale(1.1);
+}
+
+input[type="range"].studio-slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--slider-accent, #00d4ff);
+  border: 2px solid #0b0e14;
+  box-shadow: 0 0 0 1px rgba(0, 212, 255, 0.35);
+}
+
+/* Subtle scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0b0e14;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #2c374d;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3d4d6b;
+}
+
+/* Smooth scrolling & layout isolation for effect / recording cards */
+.perf-card {
+  contain: layout style paint;
+  content-visibility: auto;
+  contain-intrinsic-size: 0 72px;
+}
+
+/* High-contrast focus ring for TV D-pad & keyboard navigation */
+button:focus-visible,
+select:focus-visible,
+input[type="range"]:focus-visible,
+input[type="text"]:focus-visible {
+  outline: 2px solid #00d4ff;
+  outline-offset: 2px;
+}
+
